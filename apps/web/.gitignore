@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Durable local data and backups
+/data/
+!/data/.gitkeep
+!.env.example
