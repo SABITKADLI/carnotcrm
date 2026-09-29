@@ -10,6 +10,7 @@ import { db } from "./db";
 import type { User, Role } from "./types";
 
 export const SESSION_COOKIE = "carnot_session";
+export const INITIALIZED_COOKIE = "carnot_initialized";
 export const isDemo = () =>
   process.env.CRM_DEMO_MODE === "true" && process.env.NODE_ENV !== "production";
 export function hashPassword(password: string) {

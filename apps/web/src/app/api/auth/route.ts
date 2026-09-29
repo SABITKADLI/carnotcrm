@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { z } from "zod";
 import {
   createUser,
+  INITIALIZED_COOKIE,
   isDemo,
   login,
   logout,
@@ -37,8 +38,16 @@ export async function POST(request: Request) {
     if (body.action === "bootstrap") {
       const input = bootstrapSchema.parse(body);
       token = transaction(() => {
-        if (users().length)
+        if (users().length) {
+          jar.set(INITIALIZED_COOKIE, "true", {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax",
+            path: "/",
+            maxAge: 60 * 60 * 24 * 365,
+          });
           throw new Error("This workspace already has an administrator");
+        }
         const user = createUser(
           input.name.trim(),
           input.email.trim(),
@@ -80,6 +89,14 @@ export async function POST(request: Request) {
       path: "/",
       maxAge: 43200,
     });
+    if (body.action === "bootstrap")
+      jar.set(INITIALIZED_COOKIE, "true", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 365,
+      });
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 400 });
