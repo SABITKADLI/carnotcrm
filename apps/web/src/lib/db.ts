@@ -1,15 +1,20 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Base, Entities, Kind, Settings } from "./types";
 
 const globalDb = globalThis as unknown as { carnotDb?: DatabaseSync };
+
+function defaultDatabasePath() {
+  if (process.env.VERCEL) return resolve(tmpdir(), "carnot.sqlite");
+  return resolve(process.cwd(), "data/carnot.sqlite");
+}
+
 export function db() {
   if (!globalDb.carnotDb) {
-    const path =
-      process.env.CRM_DATABASE_PATH ||
-      resolve(process.cwd(), "data/carnot.sqlite");
+    const path = process.env.CRM_DATABASE_PATH || defaultDatabasePath();
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     const connection = new DatabaseSync(path);
     connection.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
