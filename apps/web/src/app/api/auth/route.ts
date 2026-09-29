@@ -7,6 +7,7 @@ import {
   login,
   logout,
   SESSION_COOKIE,
+  startPortableSession,
   startSession,
   users,
 } from "@/lib/auth";
@@ -44,7 +45,9 @@ export async function POST(request: Request) {
           input.password,
           "admin",
         );
-        return startSession(user.id);
+        return process.env.VERCEL
+          ? startPortableSession(user)
+          : startSession(user.id);
       });
     } else if (body.action === "demo") {
       if (!isDemo())

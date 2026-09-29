@@ -119,9 +119,11 @@ export function state(user: User): State {
       demo: isDemo(),
     };
   }
+  const team = users();
+  if (!team.some((person) => person.id === user.id)) team.unshift(user);
   return {
     user,
-    users: users(),
+    users: team,
     contacts: all("contacts"),
     fabrics: all("fabrics"),
     purchases: all("purchases"),

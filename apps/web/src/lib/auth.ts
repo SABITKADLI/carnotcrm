@@ -3,6 +3,7 @@ import {
   scryptSync,
   timingSafeEqual,
   createHash,
+  createHmac,
   randomUUID,
 } from "node:crypto";
 import { db } from "./db";
@@ -77,6 +78,31 @@ export function login(email: string, password: string) {
 }
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
+const portablePrefix = "portable.";
+function sessionSecret() {
+  return (
+    process.env.CRM_SESSION_SECRET ||
+    process.env.AUTH_SECRET ||
+    process.env.VERCEL_URL ||
+    "carnot-local-session-secret"
+  );
+}
+function sign(value: string) {
+  return createHmac("sha256", sessionSecret()).update(value).digest("base64url");
+}
+export function startPortableSession(user: User) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      active: user.active,
+      exp: Date.now() + 12 * 60 * 60_000,
+    }),
+  ).toString("base64url");
+  return `${portablePrefix}${payload}.${sign(payload)}`;
+}
 export function startSession(userId: string) {
   const token = randomBytes(32).toString("hex");
   db().prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
@@ -87,6 +113,35 @@ export function startSession(userId: string) {
 }
 export function sessionUser(token?: string): User | null {
   if (!token) return null;
+  if (token.startsWith(portablePrefix)) {
+    const value = token.slice(portablePrefix.length);
+    const dot = value.lastIndexOf(".");
+    if (dot < 1) return null;
+    const payload = value.slice(0, dot);
+    const signature = value.slice(dot + 1);
+    const expected = sign(payload);
+    const given = Buffer.from(signature);
+    const wanted = Buffer.from(expected);
+    if (given.length !== wanted.length || !timingSafeEqual(given, wanted))
+      return null;
+    const parsed = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8"),
+    ) as User & { exp?: number };
+    if (
+      !parsed.exp ||
+      parsed.exp < Date.now() ||
+      parsed.active !== true ||
+      (parsed.role !== "admin" && parsed.role !== "tailor")
+    )
+      return null;
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      email: parsed.email,
+      role: parsed.role,
+      active: true,
+    };
+  }
   const row = db()
     .prepare(
       "SELECT u.id,u.name,u.email,u.role,u.active FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND s.expires>? AND u.active=1",
