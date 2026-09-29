@@ -1,7 +1,6 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { ArrowRight, ArrowUpRight, Loader2 } from "lucide-react";
 export function Login({
   demo,
@@ -10,7 +9,6 @@ export function Login({
   demo: boolean;
   initialized: boolean;
 }) {
-  const router = useRouter();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function login(body: object) {
@@ -24,8 +22,7 @@ export function Login({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      router.replace("/");
-      router.refresh();
+      window.location.assign(window.location.origin + "/");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to sign in");
       setBusy(false);
