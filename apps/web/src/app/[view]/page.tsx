@@ -29,5 +29,5 @@ export default async function WorkspacePage({
   if (!user) redirect("/login");
   if (user.role === "tailor" && !["production", "settings"].includes(view))
     redirect("/production");
-  return <Workspace key={view} view={view} initial={state(user)} />;
+  return <Workspace key={view} view={view} initial={await state(user)} />;
 }

@@ -1,7 +1,7 @@
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { currentUser } from "@/lib/request";
-import { all, get, settings } from "@/lib/db";
+import { all, get, settings, withStore } from "@/lib/db";
 import { money, shortDate, type Invoice } from "@/lib/types";
 import { PrintButton } from "@/components/print-button";
 export const dynamic = "force-dynamic";
@@ -14,14 +14,19 @@ export default async function InvoicePage({
   if (!user) redirect("/login");
   if (user.role !== "admin") notFound();
   const { id } = await params;
-  let invoice: Invoice;
-  try {
-    invoice = get("invoices", id);
-  } catch {
-    notFound();
-  }
-  const payments = all("payments").filter((p) => p.invoiceId === id);
-  const config = settings();
+  const { invoice, payments, config } = await withStore(() => {
+    let invoice: Invoice;
+    try {
+      invoice = get("invoices", id);
+    } catch {
+      notFound();
+    }
+    return {
+      invoice,
+      payments: all("payments").filter((p) => p.invoiceId === id),
+      config: settings(),
+    };
+  });
   return (
     <>
       <div className="invoice-tools">

@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   if (raw.length > 2_000_000)
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   try {
-    return NextResponse.json(processPaidWebhook(raw, request.headers));
+    return NextResponse.json(await processPaidWebhook(raw, request.headers));
   } catch {
     return NextResponse.json(
       { error: "Webhook rejected or requires reconciliation" },

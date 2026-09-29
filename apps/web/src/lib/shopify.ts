@@ -6,7 +6,16 @@ import {
 } from "node:crypto";
 import { parse } from "lossless-json";
 import { z } from "zod";
-import { all, base, db, get, put, settings, transaction } from "./db";
+import {
+  all,
+  base,
+  get,
+  operation,
+  put,
+  saveOperation,
+  settings,
+  transaction,
+} from "./db";
 import { audit } from "./service";
 import type { Product, User } from "./types";
 
@@ -67,8 +76,8 @@ type RemoteProduct = {
   tags: string[];
   variants: { nodes: { id: string; inventoryItem: { id: string } }[] };
 };
-function patchProduct(id: string, changes: Partial<Product>) {
-  return transaction(() =>
+async function patchProduct(id: string, changes: Partial<Product>) {
+  return await transaction(() =>
     put("products", { ...get("products", id), ...changes }),
   );
 }
@@ -90,7 +99,7 @@ export async function sendToShopify(
     throw new Error(
       "Configure a Shopify publication and stock location before publishing",
     );
-  let local = transaction(() => {
+  let local = await transaction(() => {
     const p = get("products", id);
     if (p.shopifyStatus === "published")
       throw new Error(
@@ -119,7 +128,7 @@ export async function sendToShopify(
     const shop = await graphql<{ shop: { currencyCode: string } }>(
       "query StoreCurrency { shop { currencyCode } }",
     );
-    if (shop.shop.currencyCode !== settings().currency)
+    if (shop.shop.currencyCode !== (await transaction(() => settings())).currency)
       throw new Error(
         "Shopify store currency must match the CRM currency before listing products",
       );
@@ -146,7 +155,7 @@ export async function sendToShopify(
             product: {
               title: local.name,
               handle,
-              vendor: settings().companyName,
+              vendor: (await transaction(() => settings())).companyName,
               productType: local.category,
               status: "DRAFT",
               tags: ["carnot", tag],
@@ -157,7 +166,7 @@ export async function sendToShopify(
       }
       if (!remote?.variants.nodes[0])
         throw new Error("The Shopify product has no initial variant");
-      local = patchProduct(id, {
+      local = await patchProduct(id, {
         shopifyId: remote.id,
         variantId: remote.variants.nodes[0].id,
         inventoryItemId: remote.variants.nodes[0].inventoryItem.id,
@@ -216,7 +225,7 @@ export async function sendToShopify(
             "This Shopify location already has stock for the variant. Reconcile it before allocating this batch.",
           );
         }
-        patchProduct(id, { inventoryAttempted: true });
+        await patchProduct(id, { inventoryAttempted: true });
         try {
           await graphql(
             "mutation SetInventory($input: InventorySetQuantitiesInput!, $key: String!) { inventorySetQuantities(input: $input) @idempotent(key: $key) { inventoryAdjustmentGroup { createdAt } userErrors { code field message } } }",
@@ -239,10 +248,10 @@ export async function sendToShopify(
           );
         } catch (error) {
           if (error instanceof ShopifyRejected)
-            patchProduct(id, { inventoryAttempted: false });
+            await patchProduct(id, { inventoryAttempted: false });
           throw error;
         }
-        local = patchProduct(id, { inventorySynced: true });
+        local = await patchProduct(id, { inventorySynced: true });
       }
       await graphql(
         "mutation ActivateProduct($product: ProductUpdateInput!) { productUpdate(product: $product) { product { id status } userErrors { field message } } }",
@@ -253,7 +262,7 @@ export async function sendToShopify(
         { id: local.shopifyId, input: [{ publicationId }] },
       );
     }
-    transaction(() => {
+    await transaction(() => {
       put("products", {
         ...get("products", id),
         shopifyStatus: publish ? "published" : "draft",
@@ -269,7 +278,7 @@ export async function sendToShopify(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Shopify synchronization failed";
-    patchProduct(id, {
+    await patchProduct(id, {
       shopifyStatus: "error",
       shopifyError: message.slice(0, 1000),
     });
@@ -319,7 +328,7 @@ export function processPaidWebhook(raw: Buffer, headers: Headers) {
     active: true,
   };
   return transaction(() => {
-    if (db().prepare("SELECT id FROM operations WHERE id=?").get(key))
+    if (operation(key))
       return { duplicate: true };
     for (const line of body.line_items) {
       const p = all("products").find(
@@ -360,17 +369,13 @@ export function processPaidWebhook(raw: Buffer, headers: Headers) {
       body.name,
       "Channel stock updated. Shopify retains the customer invoice and payment record.",
     );
-    db()
-      .prepare(
-        "INSERT INTO operations(id,actor,payload,result,created) VALUES(?,?,?,?,?)",
-      )
-      .run(
-        key,
-        "shopify",
-        createHash("sha256").update(raw).digest("hex"),
-        "{}",
-        Date.now(),
-      );
+    saveOperation({
+      id: key,
+      actor: "shopify",
+      payload: createHash("sha256").update(raw).digest("hex"),
+      result: "{}",
+      created: Date.now(),
+    });
     return { success: true };
   });
 }

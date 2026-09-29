@@ -17,6 +17,7 @@
     "db:backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "lossless-json": "^4.3.1",
     "lucide-react": "^1.46.0",
     "next": "^16.3.5",

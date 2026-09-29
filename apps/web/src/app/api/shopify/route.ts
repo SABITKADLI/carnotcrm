@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       input.mode === "Publish with stock",
       Number(input.quantity),
     );
-    return NextResponse.json({ state: state(user) });
+    return NextResponse.json({ state: await state(user) });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 400 });
   }

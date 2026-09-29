@@ -24,8 +24,8 @@ export async function POST(request: Request) {
       typeof body.input !== "object"
     )
       throw new Error("Invalid request");
-    const result = execute(user, body.action, body.input, body.operationId);
-    return NextResponse.json({ result, state: state(user) });
+    const result = await execute(user, body.action, body.input, body.operationId);
+    return NextResponse.json({ result, state: await state(user) });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 400 });
   }

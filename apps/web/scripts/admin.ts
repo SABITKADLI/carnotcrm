@@ -23,7 +23,9 @@ try {
     process.env.CRM_ADMIN_PASSWORD || randomBytes(18).toString("base64url");
   z.string().trim().min(1).max(100).parse(name);
   z.email().parse(email);
-  transaction(() => createUser(name.trim(), email.trim(), password, "admin"));
+  await transaction(() =>
+    createUser(name.trim(), email.trim(), password, "admin"),
+  );
   console.log(
     "Administrator created. Sign in and change the temporary password in Settings.",
   );

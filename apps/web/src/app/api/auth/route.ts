@@ -3,12 +3,10 @@ import { cookies } from "next/headers";
 import { z } from "zod";
 import {
   createUser,
-  INITIALIZED_COOKIE,
   isDemo,
   login,
   logout,
   SESSION_COOKIE,
-  startPortableSession,
   startSession,
   users,
 } from "@/lib/auth";
@@ -30,22 +28,15 @@ export async function POST(request: Request) {
     const body = await readBody(request);
     const jar = await cookies();
     if (body.action === "logout") {
-      logout(jar.get(SESSION_COOKIE)?.value);
+      await logout(jar.get(SESSION_COOKIE)?.value);
       jar.delete(SESSION_COOKIE);
       return NextResponse.json({ success: true });
     }
     let token: string;
     if (body.action === "bootstrap") {
       const input = bootstrapSchema.parse(body);
-      token = transaction(() => {
+      token = await transaction(() => {
         if (users().length) {
-          jar.set(INITIALIZED_COOKIE, "true", {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "lax",
-            path: "/",
-            maxAge: 60 * 60 * 24 * 365,
-          });
           throw new Error("This workspace already has an administrator");
         }
         const user = createUser(
@@ -54,9 +45,7 @@ export async function POST(request: Request) {
           input.password,
           "admin",
         );
-        return process.env.VERCEL
-          ? startPortableSession(user)
-          : startSession(user.id);
+        return startSession(user.id);
       });
     } else if (body.action === "demo") {
       if (!isDemo())
@@ -64,7 +53,7 @@ export async function POST(request: Request) {
           { error: "Demo access is disabled" },
           { status: 403 },
         );
-      seedDemo();
+      await seedDemo();
       const user = users().find(
         (u) =>
           u.email ===
@@ -80,7 +69,7 @@ export async function POST(request: Request) {
         body.password.length > 128
       )
         throw new Error("Invalid credentials");
-      token = login(body.email, body.password);
+      token = await login(body.email, body.password);
     }
     jar.set(SESSION_COOKIE, token, {
       httpOnly: true,
@@ -89,14 +78,6 @@ export async function POST(request: Request) {
       path: "/",
       maxAge: 43200,
     });
-    if (body.action === "bootstrap")
-      jar.set(INITIALIZED_COOKIE, "true", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 365,
-      });
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 400 });

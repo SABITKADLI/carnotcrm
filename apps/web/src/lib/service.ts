@@ -3,15 +3,23 @@ import { createHash } from "node:crypto";
 import {
   all,
   base,
-  db,
   get,
+  operation,
   put,
   saveSettings,
+  saveOperation,
   sequence,
   settings,
   transaction,
+  withStore,
 } from "./db";
-import { createUser, isDemo, resetPassword, users } from "./auth";
+import {
+  createUser,
+  isDemo,
+  resetPassword,
+  setUserActive,
+  users,
+} from "./auth";
 import { createPlan } from "./cutting";
 import type {
   Contact,
@@ -82,6 +90,7 @@ function customer(id: unknown) {
   return contact;
 }
 export function state(user: User): State {
+  return withStore(() => {
   const config = settings();
   const jobs = all("jobs").filter(
     (j) => user.role === "admin" || j.tailorId === user.id,
@@ -145,6 +154,7 @@ export function state(user: User): State {
     },
     demo: isDemo(),
   };
+  }) as State;
 }
 
 /** Idempotency and all stock/accounting changes share the same write transaction. */
@@ -160,26 +170,20 @@ export function execute(
     const payload = createHash("sha256")
       .update(JSON.stringify({ action, input }))
       .digest("hex");
-    const previous = db()
-      .prepare("SELECT actor,payload,result FROM operations WHERE id=?")
-      .get(operationId);
+    const previous = operation(operationId);
     if (previous) {
       if (previous.actor !== user.id || previous.payload !== payload)
         throw new Error("Operation ID already used for a different request");
       return JSON.parse(String(previous.result));
     }
     const result = perform(user, action, input);
-    db()
-      .prepare(
-        "INSERT INTO operations(id,actor,payload,result,created) VALUES(?,?,?,?,?)",
-      )
-      .run(
-        operationId,
-        user.id,
-        payload,
-        JSON.stringify(result ?? null),
-        Date.now(),
-      );
+    saveOperation({
+      id: operationId,
+      actor: user.id,
+      payload,
+      result: JSON.stringify(result ?? null),
+      created: Date.now(),
+    });
     return result;
   });
 }
@@ -718,10 +722,7 @@ function perform(user: User, action: string, input: Input): unknown {
         throw new Error(
           "Complete open tailor assignments before disabling this account",
         );
-      db()
-        .prepare("UPDATE users SET active=? WHERE id=?")
-        .run(active ? 1 : 0, id);
-      db().prepare("DELETE FROM sessions WHERE user_id=?").run(id);
+      setUserActive(id, active);
       audit(user, active ? "Enabled account" : "Disabled account", person.name);
       return { success: true };
     }

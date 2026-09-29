@@ -6,7 +6,7 @@ export async function GET() {
   const user = await currentUser();
   if (!user)
     return NextResponse.json({ error: "Sign in to continue" }, { status: 401 });
-  return NextResponse.json(state(user), {
+  return NextResponse.json(await state(user), {
     headers: { "Cache-Control": "no-store" },
   });
 }
