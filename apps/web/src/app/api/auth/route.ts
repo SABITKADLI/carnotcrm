@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { z } from "zod";
 import {
+  createUser,
   isDemo,
   login,
   logout,
@@ -10,7 +12,16 @@ import {
 } from "@/lib/auth";
 import { seedDemo } from "@/lib/seed";
 import { checkOrigin, errorMessage, readBody } from "@/lib/request";
+import { transaction } from "@/lib/db";
 export const runtime = "nodejs";
+
+const bootstrapSchema = z.object({
+  action: z.literal("bootstrap"),
+  name: z.string().trim().min(1).max(100),
+  email: z.email().max(254),
+  password: z.string().min(12).max(128),
+});
+
 export async function POST(request: Request) {
   try {
     checkOrigin(request);
@@ -22,7 +33,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true });
     }
     let token: string;
-    if (body.action === "demo") {
+    if (body.action === "bootstrap") {
+      const input = bootstrapSchema.parse(body);
+      token = transaction(() => {
+        if (users().length)
+          throw new Error("This workspace already has an administrator");
+        const user = createUser(
+          input.name.trim(),
+          input.email.trim(),
+          input.password,
+          "admin",
+        );
+        return startSession(user.id);
+      });
+    } else if (body.action === "demo") {
       if (!isDemo())
         return NextResponse.json(
           { error: "Demo access is disabled" },

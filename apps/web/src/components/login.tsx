@@ -62,60 +62,135 @@ export function Login({
         <div className="login-form-inner">
           <span className="eyebrow">CARNOT WORKSPACE</span>
           <h2>Welcome to the studio.</h2>
-          <p className="muted">Sign in to keep things moving.</p>
-          {!initialized && (
-            <div className="notice">
-              Your workspace is ready for its first administrator. Run{" "}
-              <code>npm run admin:create</code> on the server to create your
-              account.
-            </div>
-          )}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const f = new FormData(e.currentTarget);
-              login({ email: f.get("email"), password: f.get("password") });
-            }}
-          >
-            <label>
-              Email address
-              <input
-                name="email"
-                type="email"
-                autoComplete="username"
-                placeholder="you@company.com"
-                required
-              />
-            </label>
-            <label>
-              Password
-              <input
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                placeholder="Your password"
-                required
-                maxLength={128}
-              />
-            </label>
-            {error && (
-              <p role="alert" className="error">
-                {error}
-              </p>
-            )}
-            <button
-              className="button primary full"
-              disabled={busy || !initialized}
+          <p className="muted">
+            {initialized
+              ? "Sign in to keep things moving."
+              : "Create the first administrator to open this workspace."}
+          </p>
+          {initialized ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = new FormData(e.currentTarget);
+                login({ email: f.get("email"), password: f.get("password") });
+              }}
             >
-              {busy ? (
-                <Loader2 className="spin" size={18} />
-              ) : (
-                <>
-                  Enter workspace <ArrowRight size={18} />
-                </>
+              <label>
+                Email address
+                <input
+                  name="email"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="you@company.com"
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="Your password"
+                  required
+                  maxLength={128}
+                />
+              </label>
+              {error && (
+                <p role="alert" className="error">
+                  {error}
+                </p>
               )}
-            </button>
-          </form>
+              <button className="button primary full" disabled={busy}>
+                {busy ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <>
+                    Enter workspace <ArrowRight size={18} />
+                  </>
+                )}
+              </button>
+            </form>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = new FormData(e.currentTarget);
+                const password = f.get("password");
+                const confirmPassword = f.get("confirmPassword");
+                if (password !== confirmPassword) {
+                  setError("Passwords do not match");
+                  return;
+                }
+                login({
+                  action: "bootstrap",
+                  name: f.get("name"),
+                  email: f.get("email"),
+                  password,
+                });
+              }}
+            >
+              <label>
+                Administrator name
+                <input
+                  name="name"
+                  type="text"
+                  autoComplete="name"
+                  placeholder="Your name"
+                  required
+                  maxLength={100}
+                />
+              </label>
+              <label>
+                Email address
+                <input
+                  name="email"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="you@company.com"
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="At least 12 characters"
+                  required
+                  minLength={12}
+                  maxLength={128}
+                />
+              </label>
+              <label>
+                Confirm password
+                <input
+                  name="confirmPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Repeat password"
+                  required
+                  minLength={12}
+                  maxLength={128}
+                />
+              </label>
+              {error && (
+                <p role="alert" className="error">
+                  {error}
+                </p>
+              )}
+              <button className="button primary full" disabled={busy}>
+                {busy ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <>
+                    Create administrator <ArrowRight size={18} />
+                  </>
+                )}
+              </button>
+            </form>
+          )}
           {demo && (
             <div className="demo-entry">
               <span className="eyebrow">EXPLORE WITH SAMPLE DATA</span>
@@ -136,9 +211,11 @@ export function Login({
               </small>
             </div>
           )}
-          <p className="login-help">
-            Need access? Ask your workspace administrator.
-          </p>
+          {initialized && (
+            <p className="login-help">
+              Need access? Ask your workspace administrator.
+            </p>
+          )}
         </div>
       </section>
     </main>
