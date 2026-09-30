@@ -227,6 +227,133 @@ test("fabric PO status, receipts, and linked delivery challans reconcile quantit
   });
   assert.equal(get("fabricOrders", po.id).cancelledMetres, 60);
 });
+test("operational workflow crosses PO, transport, production, cleared lots, finished goods, and billing", () => {
+  const partner = (
+    name: string,
+    role: "supplier" | "distributor" | "jobworker" | "transporter",
+  ) => run<Organization>("organization", { name, roles: [role] });
+  const mill = partner("Workflow Mill", "supplier"),
+    party = partner("Workflow Party", "distributor"),
+    maker = partner("Workflow Maker", "jobworker"),
+    carrier = partner("Workflow Carrier", "transporter");
+  const now = new Date().toISOString();
+  const spec = put("fabricSpecs", {
+    id: "fs_full_workflow",
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    name: "Workflow Oxford",
+    rangeName: "Core",
+    width: "58",
+    folding: "Open",
+    weave: "Plain",
+    threadCount: "40s",
+    construction: "120x80",
+    content: "Cotton",
+    supplierId: mill.id,
+  } satisfies FabricSpec);
+  const brand = put("brands", {
+    id: "brand_workflow",
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    name: "Workflow Brand",
+  });
+  ["Cutting Completed", "Goods Ready"].forEach((value, sortOrder) =>
+    put("referenceValues", {
+      id: `ref_workflow_${sortOrder}`,
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+      category: "production_status",
+      value,
+      active: true,
+      sortOrder,
+    }),
+  );
+  const po = run<FabricOrder>("fabricOrder", {
+    fabricSpecId: spec.id,
+    orderDate: "2026-09-01",
+    deliveryDate: "2026-09-15",
+    fabricType: "Shirting",
+    pricePerMetre: 120,
+    quantityOrdered: 100,
+    designs: "1",
+    colors: "2",
+    partyIds: [party.id],
+    fabricFor: "Garment",
+  });
+  run("fabricReceipt", {
+    fabricOrderId: po.id,
+    receiptDate: "2026-09-10",
+    dispatchDate: "2026-09-11",
+    quantityMetres: 100,
+    warehouse: "Singal Fabrics",
+    lrNumber: "LR-FLOW-1",
+    lrDate: "2026-09-10",
+    transporterId: carrier.id,
+    numberOfBales: 2,
+    partyId: party.id,
+    jobworkerId: maker.id,
+    pickedBy: "Workflow Driver",
+  });
+  const challan = all("challans")[0];
+  run("challanStatus", { id: challan.id, status: "Picked Up" });
+  run("challanStatus", { id: challan.id, status: "Delivered" });
+  run("challanStatus", { id: challan.id, status: "Acknowledged" });
+  const workOrder = run<{ id: string }>("workOrder", {
+    challanId: challan.id,
+    brandId: brand.id,
+    itemName: "Oxford shirt",
+    bodyFabric: 100,
+    trimFabric: 0,
+    issuedDate: "2026-09-11",
+  });
+  const productionData = {
+    id: workOrder.id,
+    approvedConsumption: 2,
+    ratio: { M: 1 },
+    cutting: { M: 50 },
+    cuttingDate: "2026-09-12",
+    productionRemarks: "Workflow test",
+  };
+  run("productionUpdate", {
+    ...productionData,
+    status: "Cutting Completed",
+  });
+  run("productionUpdate", {
+    ...productionData,
+    status: "Goods Ready",
+    actualGoodsReadyDate: "2026-09-20",
+    fiDone: true,
+  });
+  run("productionInward", {
+    workOrderId: workOrder.id,
+    inwardDate: "2026-09-21",
+    setwiseQuantity: 48,
+    mixPiecesQuantity: 0,
+    damagePiecesQuantity: 2,
+    remarks: "Two damaged pieces",
+  });
+
+  assert.equal(get("fabricOrders", po.id).status, "Received");
+  assert.equal(get("challans", challan.id).status, "Acknowledged");
+  assert.equal(get("workOrders", workOrder.id).status, "Cleared");
+  assert.equal(get("workOrders", workOrder.id).archived, true);
+  assert.equal(all("inwards")[0].totalInward, 50);
+  const finishedProduct = all("products").find(
+    (item) => item.orderId === workOrder.id,
+  )!;
+  assert.equal(finishedProduct.stock, 48);
+  const invoice = bill(finishedProduct, "product", 10);
+  assert.equal(invoice.lines[0].quantity, 10);
+  assert.equal(get("products", finishedProduct.id).stock, 38);
+  assert.ok(
+    all("movements").some(
+      (item) => item.type === "Garment inward" && item.quantity === 48,
+    ),
+  );
+});
 test("reserved fabric cannot be sold and cancellation releases it", () => {
   const o = plan(order(95));
   assert.equal(get("fabrics", fabric.id).reserved, 95000);

@@ -43,15 +43,63 @@ export function usePeriodSelection(initial: OperationFilters = {}) {
   const requested = initial.period as PeriodMode | undefined;
   const [mode, setMode] = useState<PeriodMode>(
     requested &&
-      ["this-month", "previous-month", "month", "fy", "all"].includes(requested)
+      [
+        "last-7",
+        "last-30",
+        "last-90",
+        "last-180",
+        "current-quarter",
+        "year-to-date",
+        "fy",
+        "custom",
+        "all",
+        "this-month",
+        "previous-month",
+        "month",
+      ].includes(requested)
       ? requested
-      : "all",
+      : "last-90",
   );
   const [month, setMonth] = useState(
     initial.month || new Date().toISOString().slice(0, 7),
   );
   const [fy, setFy] = useState(initial.fy || currentFinancialYear());
-  return { mode, setMode, month, setMonth, fy, setFy };
+  const now = new Date(),
+    defaultEnd = now.toISOString().slice(0, 10),
+    defaultStart = new Date(now.getFullYear(), now.getMonth() - 2, now.getDate())
+      .toISOString()
+      .slice(0, 10);
+  const [customStart, setCustomStart] = useState(
+    initial.start || defaultStart,
+  );
+  const [customEnd, setCustomEnd] = useState(initial.end || defaultEnd);
+  return {
+    mode,
+    setMode,
+    month,
+    setMonth,
+    fy,
+    setFy,
+    customStart,
+    setCustomStart,
+    customEnd,
+    setCustomEnd,
+  };
+}
+
+export function inSelectedPeriod(
+  value: string | undefined,
+  period: ReturnType<typeof usePeriodSelection>,
+) {
+  return inPeriod(
+    value,
+    period.mode,
+    period.month,
+    period.fy,
+    new Date(),
+    period.customStart,
+    period.customEnd,
+  );
 }
 
 export function PeriodBar({
@@ -68,23 +116,17 @@ export function PeriodBar({
           value={period.mode}
           onChange={(event) => period.setMode(event.target.value as PeriodMode)}
         >
-          <option value="this-month">This month</option>
-          <option value="previous-month">Previous month</option>
-          <option value="month">Selected month</option>
-          <option value="fy">Financial year</option>
+          <option value="last-7">Last 7 days</option>
+          <option value="last-30">Last 30 days</option>
+          <option value="last-90">Last 90 days</option>
+          <option value="last-180">Last 6 months</option>
+          <option value="current-quarter">Current quarter</option>
+          <option value="year-to-date">Calendar year to date</option>
+          <option value="fy">Indian financial year (Apr–Mar)</option>
+          <option value="custom">Custom date range</option>
           <option value="all">All time</option>
         </select>
       </label>
-      {period.mode === "month" && (
-        <label>
-          <span>Month</span>
-          <input
-            type="month"
-            value={period.month}
-            onChange={(event) => period.setMonth(event.target.value)}
-          />
-        </label>
-      )}
       {period.mode === "fy" && (
         <label>
           <span>Financial year</span>
@@ -97,11 +139,35 @@ export function PeriodBar({
                 key={year}
                 value={`${year}-${String(year + 1).slice(-2)}`}
               >
-                FY {year}-{String(year + 1).slice(-2)}
+                FY {year}–{String(year + 1).slice(-2)} · 1 Apr {year}–31 Mar {year + 1}
               </option>
             ))}
           </select>
         </label>
+      )}
+      {period.mode === "custom" && (
+        <>
+          <label>
+            <span>From</span>
+            <input
+              type="date"
+              value={period.customStart}
+              onChange={(event) => period.setCustomStart(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>To</span>
+            <input
+              type="date"
+              value={period.customEnd}
+              min={period.customStart}
+              onChange={(event) => period.setCustomEnd(event.target.value)}
+            />
+          </label>
+        </>
+      )}
+      {period.mode === "fy" && (
+        <p className="period-help">Indian FY runs from 1 April to 31 March.</p>
       )}
     </div>
   );
@@ -171,33 +237,19 @@ export function EnhancedDashboard({
 }) {
   const period = usePeriodSelection(filters);
   const orders = state.fabricOrders.filter(
-    (item) =>
-      !item.archived &&
-      inPeriod(item.orderDate, period.mode, period.month, period.fy),
+    (item) => !item.archived && inSelectedPeriod(item.orderDate, period),
   );
   const transports = state.transports.filter((item) =>
-    inPeriod(
-      item.dcIssueDate || item.lrDate,
-      period.mode,
-      period.month,
-      period.fy,
-    ),
+    inSelectedPeriod(item.dcIssueDate || item.lrDate, period),
   );
   const active = state.workOrders.filter(
     (item) =>
       !item.archived &&
-      inPeriod(
-        item.issuedDate || item.fabricOutwardDate,
-        period.mode,
-        period.month,
-        period.fy,
-      ),
+      inSelectedPeriod(item.issuedDate || item.fabricOutwardDate, period),
   );
   const inwardIds = new Set(
     state.inwards
-      .filter((item) =>
-        inPeriod(item.inwardDate, period.mode, period.month, period.fy),
-      )
+      .filter((item) => inSelectedPeriod(item.inwardDate, period))
       .map((item) => item.id),
   );
   const inwards = state.inwards.filter((item) => inwardIds.has(item.id));
@@ -210,7 +262,13 @@ export function EnhancedDashboard({
     (sum, item) => sum + item.damagePiecesQuantity,
     0,
   );
-  const query = periodQuery(period.mode, period.month, period.fy);
+  const query = periodQuery(
+    period.mode,
+    period.month,
+    period.fy,
+    period.customStart,
+    period.customEnd,
+  );
   const attention = active
     .filter((item) => item.ageingDays >= 45)
     .sort((a, b) => b.ageingDays - a.ageingDays)
@@ -371,7 +429,7 @@ export function EnhancedFabricOrders({
       !order.archived &&
       (!normalizedQuery || searchable.includes(normalizedQuery)) &&
       (!urlStatus || order.status === urlStatus) &&
-      inPeriod(order.orderDate, period.mode, period.month, period.fy)
+      inSelectedPeriod(order.orderDate, period)
     );
   });
   const selected = state.fabricOrders.find((order) => order.id === selectedId);
@@ -1202,12 +1260,7 @@ export function EnhancedTransport({
   const [page, setPage] = useState(1);
   const challans = new Map(state.challans.map((item) => [item.id, item]));
   const allPeriod = state.transports.filter((item) =>
-    inPeriod(
-      item.dcIssueDate || item.lrDate,
-      period.mode,
-      period.month,
-      period.fy,
-    ),
+    inSelectedPeriod(item.dcIssueDate || item.lrDate, period),
   );
   const movements = allPeriod.filter((item) => {
     const status = item.challanId
@@ -1684,18 +1737,13 @@ export function EnhancedReports({
 }) {
   const period = usePeriodSelection(filters);
   const orders = state.fabricOrders.filter((item) =>
-    inPeriod(item.orderDate, period.mode, period.month, period.fy),
+    inSelectedPeriod(item.orderDate, period),
   );
   const transports = state.transports.filter((item) =>
-    inPeriod(
-      item.dcIssueDate || item.lrDate,
-      period.mode,
-      period.month,
-      period.fy,
-    ),
+    inSelectedPeriod(item.dcIssueDate || item.lrDate, period),
   );
   const inwards = state.inwards.filter((item) =>
-    inPeriod(item.inwardDate, period.mode, period.month, period.fy),
+    inSelectedPeriod(item.inwardDate, period),
   );
   const inwardWork = new Map(state.workOrders.map((item) => [item.id, item]));
   const supplierTotals = Object.entries(

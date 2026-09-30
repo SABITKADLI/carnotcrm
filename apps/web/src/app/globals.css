@@ -2516,6 +2516,12 @@ td small,
 .period-bar label > span {
   text-transform: uppercase;
 }
+.period-help {
+  align-self: center;
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
 .clickable-stats .stat,
 .transport-stats .stat {
   color: inherit;
@@ -2688,6 +2694,44 @@ td small,
 .drawer-form .span-all,
 .span-all {
   grid-column: 1 / -1;
+}
+.production-size-section,
+.production-inward-section {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 82%, var(--paper));
+}
+.production-size-section h3,
+.production-inward-section h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+.production-size-section > div > span,
+.production-inward-section p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.production-size-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 9px;
+}
+.production-size-grid label {
+  gap: 4px;
+  text-align: center;
+}
+.production-size-grid input {
+  min-width: 0;
+  padding: 9px 6px;
+  text-align: center;
+}
+.production-inward-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 .multi-field select {
   min-height: 92px;
@@ -2992,6 +3036,12 @@ td small,
   .drawer-form .span-all,
   .span-all {
     grid-column: auto;
+  }
+  .production-size-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .production-inward-grid {
+    grid-template-columns: 1fr;
   }
   .record-drawer > header,
   .drawer-content,

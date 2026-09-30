@@ -12,8 +12,17 @@ import {
   Printer,
   Truck,
   Upload,
+  X,
 } from "lucide-react";
-import type { State } from "@/lib/types";
+import {
+  PRODUCTION_SIZES,
+  type ProductionWorkOrder,
+  type State,
+} from "@/lib/types";
+import {
+  DEFAULT_PRODUCTION_STAGES,
+  productionStageRules,
+} from "@/lib/production-workflow";
 import { Badge, Empty, SectionTitle } from "./ui";
 import type { Mutate } from "./editor";
 import {
@@ -23,10 +32,10 @@ import {
   EnhancedReports,
   EnhancedTransport,
   PeriodBar,
+  inSelectedPeriod,
   usePeriodSelection,
   type OperationFilters,
 } from "./enhanced-operations";
-import { inPeriod } from "@/lib/period";
 
 type Props = {
   view: string;
@@ -120,6 +129,319 @@ function Pager({
   );
 }
 
+function ProductionUpdateDrawer({
+  workOrder,
+  state,
+  mutate,
+  close,
+}: {
+  workOrder: ProductionWorkOrder;
+  state: State;
+  mutate: Mutate;
+  close: () => void;
+}) {
+  const databaseStages = state.referenceValues
+    .filter(
+      (item) => item.category === "production_status" && item.active,
+    )
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((item) => item.value);
+  const stageOptions = Array.from(
+    new Set([
+      workOrder.status,
+      ...(databaseStages.length
+        ? databaseStages
+        : [...DEFAULT_PRODUCTION_STAGES]),
+    ]),
+  );
+  const [stage, setStage] = useState(workOrder.status);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const rules = productionStageRules(stage);
+  const today = new Date().toISOString().slice(0, 10);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const form = new FormData(event.currentTarget);
+      const ratio = rules.requireRatio
+        ? Object.fromEntries(
+            PRODUCTION_SIZES.map((size) => [
+              size,
+              form.get(`ratio-${size}`) || 0,
+            ]),
+          )
+        : undefined;
+      const cutting = rules.showCuttingQuantities
+        ? Object.fromEntries(
+            PRODUCTION_SIZES.map((size) => [
+              size,
+              form.get(`cutting-${size}`) || 0,
+            ]),
+          )
+        : undefined;
+      await mutate("productionUpdate", {
+        id: workOrder.id,
+        status: stage,
+        ...(rules.requireConsumption
+          ? { approvedConsumption: form.get("approvedConsumption") }
+          : {}),
+        ratio,
+        cutting,
+        ...(rules.requireCuttingDate
+          ? { cuttingDate: form.get("cuttingDate") }
+          : {}),
+        ...(rules.showFiDone
+          ? { fiDone: form.get("fiDone") === "on" }
+          : {}),
+        ...(rules.requireGoodsReadyDate
+          ? { actualGoodsReadyDate: form.get("actualGoodsReadyDate") }
+          : {}),
+        productionRemarks: form.get("productionRemarks"),
+      });
+      const setwiseQuantity = Number(form.get("setwiseQuantity") || 0),
+        mixPiecesQuantity = Number(form.get("mixPiecesQuantity") || 0),
+        damagePiecesQuantity = Number(form.get("damagePiecesQuantity") || 0);
+      if (
+        rules.allowInward &&
+        setwiseQuantity + mixPiecesQuantity + damagePiecesQuantity > 0
+      )
+        await mutate("productionInward", {
+          workOrderId: workOrder.id,
+          inwardDate: form.get("inwardDate"),
+          setwiseQuantity,
+          mixPiecesQuantity,
+          damagePiecesQuantity,
+          remarks: form.get("inwardRemarks"),
+        });
+      close();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Unable to update production",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="drawer-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) close();
+      }}
+    >
+      <aside
+        className="record-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Update production work order ${workOrder.woNumber}`}
+      >
+        <header>
+          <div>
+            <span className="eyebrow">PRODUCTION WORKFLOW</span>
+            <h2>WO {workOrder.woNumber}</h2>
+            <p>
+              {workOrder.itemName} · {workOrder.jobworkerName}
+            </p>
+          </div>
+          <button className="icon-button" aria-label="Close" onClick={close}>
+            <X size={19} />
+          </button>
+        </header>
+        <form className="drawer-form" onSubmit={submit}>
+          <label className="span-all">
+            Production stage
+            <select
+              name="status"
+              value={stage}
+              onChange={(event) => setStage(event.target.value)}
+              required
+            >
+              {stageOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="form-note span-all">{rules.description}</p>
+          {rules.requireConsumption && (
+            <label>
+              Approved consumption (metres per piece)
+              <input
+                name="approvedConsumption"
+                type="number"
+                min="0.001"
+                max="100"
+                step="0.001"
+                required
+                defaultValue={workOrder.approvedConsumption || ""}
+              />
+            </label>
+          )}
+          {rules.requireCuttingDate && (
+            <label>
+              Cutting date
+              <input
+                name="cuttingDate"
+                type="date"
+                required
+                defaultValue={workOrder.cuttingDate || today}
+              />
+            </label>
+          )}
+          {rules.requireRatio && (
+            <div className="span-all production-size-section">
+              <div>
+                <h3>Approved size ratio</h3>
+                <span>Enter at least one size.</span>
+              </div>
+              <div className="production-size-grid">
+                {PRODUCTION_SIZES.map((size) => (
+                  <label key={size}>
+                    {size}
+                    <input
+                      name={`ratio-${size}`}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      defaultValue={workOrder.ratio[size] || ""}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          {rules.showCuttingQuantities && (
+            <div className="span-all production-size-section">
+              <div>
+                <h3>Cut quantities by size</h3>
+                <span>Required from Cutting Completed onward.</span>
+              </div>
+              <div className="production-size-grid">
+                {PRODUCTION_SIZES.map((size) => (
+                  <label key={size}>
+                    {size}
+                    <input
+                      name={`cutting-${size}`}
+                      type="number"
+                      min="0"
+                      step="1"
+                      defaultValue={workOrder.cutting[size] || ""}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          {rules.showFiDone && (
+            <label className="checkbox span-all">
+              <input
+                name="fiDone"
+                type="checkbox"
+                defaultChecked={workOrder.fiDone}
+              />
+              Final inspection completed
+            </label>
+          )}
+          {rules.requireGoodsReadyDate && (
+            <label>
+              Actual goods ready date
+              <input
+                name="actualGoodsReadyDate"
+                type="date"
+                required
+                defaultValue={workOrder.actualGoodsReadyDate || today}
+              />
+            </label>
+          )}
+          <label className="span-all">
+            Production remarks
+            <textarea
+              name="productionRemarks"
+              required={rules.requireRemarks}
+              defaultValue={workOrder.productionRemarks}
+              placeholder={
+                rules.requireRemarks
+                  ? "Required for this stage"
+                  : "Blockers, checks, or next action"
+              }
+            />
+          </label>
+          {rules.allowInward && (
+            <section className="span-all production-inward-section">
+              <div>
+                <h3>Garment inward</h3>
+                <p>
+                  Optional now. Enter any received quantities to clear the lot
+                  and add accepted pieces to finished goods.
+                </p>
+              </div>
+              <div className="production-inward-grid">
+                <label>
+                  Inward date
+                  <input name="inwardDate" type="date" defaultValue={today} />
+                </label>
+                <label>
+                  Setwise quantity
+                  <input
+                    name="setwiseQuantity"
+                    type="number"
+                    min="0"
+                    step="1"
+                    defaultValue="0"
+                  />
+                </label>
+                <label>
+                  Mix pieces
+                  <input
+                    name="mixPiecesQuantity"
+                    type="number"
+                    min="0"
+                    step="1"
+                    defaultValue="0"
+                  />
+                </label>
+                <label>
+                  Damage pieces
+                  <input
+                    name="damagePiecesQuantity"
+                    type="number"
+                    min="0"
+                    step="1"
+                    defaultValue="0"
+                  />
+                </label>
+                <label className="span-all">
+                  Inward remarks
+                  <textarea name="inwardRemarks" />
+                </label>
+              </div>
+            </section>
+          )}
+          {error && (
+            <p className="error span-all" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="form-footer span-all">
+            <button className="button secondary" type="button" onClick={close}>
+              Cancel
+            </button>
+            <button className="button primary" disabled={busy}>
+              {busy ? "Saving…" : "Save production update"}
+            </button>
+          </div>
+        </form>
+      </aside>
+    </div>
+  );
+}
+
 export function OperationsViews({
   view,
   state,
@@ -129,6 +451,7 @@ export function OperationsViews({
   filters = {},
 }: Props) {
   const [page, setPage] = useState(1);
+  const [productionOrderId, setProductionOrderId] = useState("");
   const period = usePeriodSelection(filters);
   const match = (...values: unknown[]) =>
     values.join(" ").toLowerCase().includes(query.toLowerCase());
@@ -473,12 +796,7 @@ export function OperationsViews({
         !item.archived &&
         (!filters.open || item.id === filters.open) &&
         (!filters.age || item.ageingDays >= Number(filters.age)) &&
-        inPeriod(
-          item.issuedDate || item.fabricOutwardDate,
-          period.mode,
-          period.month,
-          period.fy,
-        ) &&
+        inSelectedPeriod(item.issuedDate || item.fabricOutwardDate, period) &&
         match(
           item.woNumber,
           item.dcNumber,
@@ -489,6 +807,9 @@ export function OperationsViews({
         ),
     );
     const visible = paginate(work, page);
+    const selectedWorkOrder = state.workOrders.find(
+      (item) => item.id === productionOrderId,
+    );
     return (
       <>
         <PeriodBar period={period} />
@@ -562,100 +883,10 @@ export function OperationsViews({
                   <td>
                     <button
                       className="text-link"
-                      onClick={async () => {
-                        const status = window.prompt(
-                          "Production stage",
-                          item.status,
-                        );
-                        if (!status) return;
-                        const consumption =
-                          item.approvedConsumption ||
-                          Number(
-                            window.prompt(
-                              "Approved consumption (metres per piece)",
-                              "1.6",
-                            ),
-                          );
-                        const parseSizes = (value: string | null) =>
-                          Object.fromEntries(
-                            (value || "")
-                              .split(",")
-                              .map((part) => part.trim().split(":"))
-                              .filter(
-                                ([size, quantity]) =>
-                                  size &&
-                                  quantity &&
-                                  Number.isFinite(Number(quantity)),
-                              )
-                              .map(([size, quantity]) => [
-                                size.toUpperCase(),
-                                Number(quantity),
-                              ]),
-                          );
-                        const ratio = parseSizes(
-                          window.prompt(
-                            "Size ratio (example: S:1, M:2, L:2, XL:1)",
-                            Object.entries(item.ratio)
-                              .map(([size, value]) => `${size}:${value}`)
-                              .join(", "),
-                          ),
-                        );
-                        const cutting = parseSizes(
-                          window.prompt(
-                            "Cut quantities by size (optional)",
-                            Object.entries(item.cutting)
-                              .map(([size, value]) => `${size}:${value}`)
-                              .join(", "),
-                          ),
-                        );
-                        await mutate("productionUpdate", {
-                          id: item.id,
-                          status,
-                          approvedConsumption: consumption,
-                          ratio,
-                          cutting,
-                          cuttingDate:
-                            item.cuttingDate ||
-                            (status.toLowerCase().includes("cut")
-                              ? new Date().toISOString().slice(0, 10)
-                              : ""),
-                          productionRemarks: item.productionRemarks,
-                        });
-                      }}
+                      onClick={() => setProductionOrderId(item.id)}
                     >
-                      Update
+                      Update stage
                     </button>
-                    {(["Ready", "Goods Ready", "Finished"].includes(
-                      item.status,
-                    ) ||
-                      item.actualGoodsReadyDate) && (
-                      <button
-                        className="text-link"
-                        onClick={async () => {
-                          const setwise = window.prompt(
-                            "Setwise inward quantity",
-                            "0",
-                          );
-                          if (setwise === null) return;
-                          const mix = window.prompt("Mix pieces quantity", "0");
-                          if (mix === null) return;
-                          const damage = window.prompt(
-                            "Damage pieces quantity",
-                            "0",
-                          );
-                          if (damage === null) return;
-                          await mutate("productionInward", {
-                            workOrderId: item.id,
-                            inwardDate: new Date().toISOString().slice(0, 10),
-                            setwiseQuantity: setwise,
-                            mixPiecesQuantity: mix,
-                            damagePiecesQuantity: damage,
-                          });
-                        }}
-                      >
-                        Receive inward
-                      </button>
-                    )}
                   </td>
                 </tr>
               ))}
@@ -665,6 +896,14 @@ export function OperationsViews({
           )}
           <Pager total={work.length} page={visible.page} setPage={setPage} />
         </section>
+        {selectedWorkOrder && (
+          <ProductionUpdateDrawer
+            workOrder={selectedWorkOrder}
+            state={state}
+            mutate={mutate}
+            close={() => setProductionOrderId("")}
+          />
+        )}
       </>
     );
   }
@@ -674,9 +913,7 @@ export function OperationsViews({
     );
     const periodWorkOrderIds = new Set(
       state.inwards
-        .filter((item) =>
-          inPeriod(item.inwardDate, period.mode, period.month, period.fy),
-        )
+        .filter((item) => inSelectedPeriod(item.inwardDate, period))
         .map((item) => item.workOrderId),
     );
     const cleared = state.workOrders.filter(

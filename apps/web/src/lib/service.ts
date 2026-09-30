@@ -33,6 +33,7 @@ import type {
   User,
 } from "./types";
 import { PRODUCTION_SIZES } from "./types";
+import { productionStageRules } from "./production-workflow";
 
 export type Input = Record<string, unknown>;
 const str = (v: unknown, max = 500) =>
@@ -540,48 +541,44 @@ function perform(user: User, action: string, input: Input): unknown {
       0,
     );
     const status = str(input.status, 100);
+    const availableStatuses = all("referenceValues")
+      .filter(
+        (item) => item.category === "production_status" && item.active,
+      )
+      .map((item) => item.value);
+    if (
+      availableStatuses.length &&
+      status !== workOrder.status &&
+      !availableStatuses.includes(status)
+    )
+      throw new Error("Select an active production stage from Master Data");
+    const stageRules = productionStageRules(status);
     const approvedConsumption =
       input.approvedConsumption === undefined ||
       input.approvedConsumption === ""
         ? workOrder.approvedConsumption
         : num(input.approvedConsumption, 0.001, 100);
-    if (
-      [
-        "Cutting",
-        "Cutting Completed",
-        "Stitching",
-        "Finishing",
-        "Ready",
-        "Cleared",
-      ].includes(status) &&
-      !approvedConsumption
-    )
+    if (stageRules.requireConsumption && !approvedConsumption)
       throw new Error("Approved consumption is required before cutting starts");
     if (
-      [
-        "Cutting",
-        "Cutting Completed",
-        "Stitching",
-        "Finishing",
-        "Ready",
-        "Cleared",
-      ].includes(status) &&
+      stageRules.requireRatio &&
       !Object.values(ratio).some((value) => (value || 0) > 0)
     )
       throw new Error("Enter at least one size ratio before cutting starts");
     const cuttingDate =
       optional(input.cuttingDate, 10) || workOrder.cuttingDate;
-    if (
-      [
-        "Cutting Completed",
-        "Stitching",
-        "Finishing",
-        "Ready",
-        "Cleared",
-      ].includes(status) &&
-      !cuttingDate
-    )
+    if (stageRules.requireCuttingDate && !cuttingDate)
       throw new Error("Cutting date is required at Cutting Completed or later");
+    if (stageRules.requireCuttingQuantities && totalCutQuantity <= 0)
+      throw new Error("Enter at least one cut quantity for this stage");
+    const actualGoodsReadyDate =
+      optional(input.actualGoodsReadyDate, 10) ||
+      workOrder.actualGoodsReadyDate;
+    if (stageRules.requireGoodsReadyDate && !actualGoodsReadyDate)
+      throw new Error("Actual goods ready date is required for this stage");
+    const productionRemarks = optional(input.productionRemarks, 3000);
+    if (stageRules.requireRemarks && !productionRemarks)
+      throw new Error("Production remarks are required for this stage");
     const updated = put("workOrders", {
       ...workOrder,
       cutting,
@@ -594,10 +591,8 @@ function perform(user: User, action: string, input: Input): unknown {
         input.fiDone === undefined
           ? workOrder.fiDone
           : z.coerce.boolean().parse(input.fiDone),
-      productionRemarks: optional(input.productionRemarks, 3000),
-      actualGoodsReadyDate:
-        optional(input.actualGoodsReadyDate, 10) ||
-        workOrder.actualGoodsReadyDate,
+      productionRemarks,
+      actualGoodsReadyDate,
       expectedQuantity: approvedConsumption
         ? workOrder.bodyFabric / approvedConsumption
         : 0,
@@ -617,6 +612,10 @@ function perform(user: User, action: string, input: Input): unknown {
       )
     )
       throw new Error("You can only record inward for your own work orders");
+    if (!productionStageRules(workOrder.status).allowInward)
+      throw new Error(
+        "Garment inward can only be recorded when goods are ready or dispatched",
+      );
     const setwiseQuantity = integer(input.setwiseQuantity ?? 0, 0),
       mixPiecesQuantity = integer(input.mixPiecesQuantity ?? 0, 0),
       damagePiecesQuantity = integer(input.damagePiecesQuantity ?? 0, 0);

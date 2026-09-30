@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   LayoutDashboard,
-  ShoppingBag,
   Scissors,
   Spool,
   Factory,
@@ -48,9 +47,7 @@ const navigation = [
   { id: "production", label: "Production", icon: Factory },
   { id: "cleared-lots", label: "Cleared lots", icon: ClipboardCheck },
   { id: "workbook-sync", label: "Workbook sync", icon: FileSpreadsheet },
-  { id: "orders", label: "Garment orders · Legacy", icon: ShoppingBag },
   { id: "cutting", label: "Cutting room", icon: Scissors },
-  { id: "garment-production", label: "Garment jobs · Legacy", icon: Factory },
   {
     id: "products",
     label: "Finished goods",
