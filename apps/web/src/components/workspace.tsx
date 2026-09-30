@@ -34,6 +34,7 @@ import { downloadCSV } from "./cutting-room";
 import { Progress } from "./ui";
 import { OperationsViews } from "./operations-views";
 import type { OperationFilters } from "./enhanced-operations";
+import { canAccessView } from "@/lib/access";
 const navigation = [
   {
     id: "overview",
@@ -270,19 +271,7 @@ export function Workspace({
   }
   const tailor = ["tailor", "jobworker"].includes(state.user.role);
   const nav = navigation.filter(
-    (n) =>
-      state.user.role === "admin" ||
-      (
-        {
-          supplier: ["fabric-orders", "transport-dc", "settings"],
-          agent: ["fabric-orders", "settings"],
-          transporter: ["transport-dc", "settings"],
-          delivery: ["transport-dc", "settings"],
-          jobworker: ["transport-dc", "production", "cleared-lots", "settings"],
-          tailor: ["transport-dc", "production", "cleared-lots", "settings"],
-          distributor: ["fabric-orders", "transport-dc", "settings"],
-        } as Record<string, string[]>
-      )[state.user.role]?.includes(n.id),
+    (n) => canAccessView(state.user.role, n.id),
   );
   const total = state.jobs.reduce((s, j) => s + j.quantity, 0),
     finished = state.jobs.reduce((s, j) => s + j.finished, 0);

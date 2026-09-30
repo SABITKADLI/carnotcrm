@@ -1688,14 +1688,51 @@ function perform(user: User, action: string, input: Input): unknown {
         throw new Error(
           "Link partner accounts to an imported organization or person",
         );
-      if (
-        partnerId &&
-        !all("organizations").some(
-          (organization) => organization.id === partnerId,
-        ) &&
-        !all("people").some((person) => person.id === partnerId)
-      )
+      const linkedOrganization = partnerId
+        ? all("organizations").find(
+            (organization) => organization.id === partnerId,
+          )
+        : undefined;
+      const linkedPerson = partnerId
+        ? all("people").find((person) => person.id === partnerId)
+        : undefined;
+      if (partnerId && !linkedOrganization && !linkedPerson)
         throw new Error("Linked partner record was not found");
+      if (role === "delivery" && !linkedPerson)
+        throw new Error(
+          "Delivery accounts must link to a driver, pickup, or delivery person",
+        );
+      if (
+        ["supplier", "agent", "transporter", "jobworker", "distributor"].includes(
+          role,
+        )
+      ) {
+        if (!linkedOrganization)
+          throw new Error(`${role} accounts must link to an organization`);
+        const acceptedRoles: Record<string, string[]> = {
+          supplier: ["supplier", "vendor"],
+          agent: ["agent"],
+          transporter: ["transporter"],
+          jobworker: ["jobworker"],
+          distributor: ["distributor"],
+        };
+        if (
+          !linkedOrganization.roles.some((linkedRole) =>
+            acceptedRoles[role].includes(linkedRole),
+          )
+        )
+          throw new Error(
+            `Choose an organization marked as ${acceptedRoles[role].join(" or ")}`,
+          );
+      }
+      if (
+        role === "tailor" &&
+        partnerId &&
+        (!linkedOrganization || !linkedOrganization.roles.includes("jobworker"))
+      )
+        throw new Error(
+          "Tailor accounts must link to a jobworker organization when a partner is selected",
+        );
       const person = createUser(
         str(input.name, 100),
         z.email().parse(input.email),

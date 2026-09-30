@@ -1,7 +1,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
-import { all, db, get, put, settings } from "../src/lib/db";
+import { all, base, db, get, put, settings } from "../src/lib/db";
 import { createUser, login, sessionUser, startSession } from "../src/lib/auth";
 import { execute, state } from "../src/lib/service";
 import { createPlan } from "../src/lib/cutting";
@@ -18,6 +18,7 @@ import type {
   FabricOrder,
   FabricSpec,
   Organization,
+  Person,
 } from "../src/lib/types";
 
 process.env.CRM_DATABASE_PATH = ":memory:";
@@ -144,6 +145,80 @@ beforeEach(() => {
     cost: 100,
     price: 200,
   });
+});
+
+test("partner accounts must link to the matching organization or person", () => {
+  const supplierOrganization = put("organizations", {
+    ...base("org"),
+    version: 1,
+    name: "Portal Mill",
+    roles: ["supplier"],
+    email: "",
+    phone: "",
+    address: "",
+    taxId: "",
+    notes: "",
+  } satisfies Organization);
+  const jobworkerOrganization = put("organizations", {
+    ...base("org"),
+    version: 1,
+    name: "Portal Factory",
+    roles: ["jobworker"],
+    email: "",
+    phone: "",
+    address: "",
+    taxId: "",
+    notes: "",
+  } satisfies Organization);
+  const driver = put("people", {
+    ...base("person"),
+    version: 1,
+    name: "Portal Driver",
+    role: "delivery",
+    email: "",
+    phone: "",
+    notes: "",
+  } satisfies Person);
+
+  assert.throws(
+    () =>
+      run("user", {
+        name: "Wrong Delivery",
+        email: "wrong-delivery@example.com",
+        password: "long-test-password",
+        role: "delivery",
+        partnerId: supplierOrganization.id,
+      }),
+    /must link to a driver, pickup, or delivery person/,
+  );
+  assert.throws(
+    () =>
+      run("user", {
+        name: "Wrong Factory",
+        email: "wrong-factory@example.com",
+        password: "long-test-password",
+        role: "jobworker",
+        partnerId: supplierOrganization.id,
+      }),
+    /marked as jobworker/,
+  );
+
+  const delivery = run<User>("user", {
+    name: "Delivery User",
+    email: "delivery@example.com",
+    password: "long-test-password",
+    role: "delivery",
+    partnerId: driver.id,
+  });
+  const jobworker = run<User>("user", {
+    name: "Factory User",
+    email: "factory@example.com",
+    password: "long-test-password",
+    role: "jobworker",
+    partnerId: jobworkerOrganization.id,
+  });
+  assert.equal(delivery.partnerId, driver.id);
+  assert.equal(jobworker.partnerId, jobworkerOrganization.id);
 });
 
 test("partial purchasing receipt changes stock exactly once on retry", () => {

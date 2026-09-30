@@ -17,6 +17,7 @@ import {
   ReceiptText,
   Save,
   KeyRound,
+  CircleHelp,
 } from "lucide-react";
 import { money, meters, shortDate, type State, type Order } from "@/lib/types";
 import {
@@ -31,6 +32,7 @@ import {
 import type { Mutate } from "./editor";
 import { CuttingMap, downloadCSV } from "./cutting-room";
 import { stitchingSteps } from "@/lib/stitching";
+import { SystemHelp } from "./system-help";
 type Props = {
   view: string;
   state: State;
@@ -1443,6 +1445,7 @@ function SettingsView({ state: s, edit, mutate }: Props) {
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState(""),
     [error, setError] = useState("");
+  const [helpOpen, setHelpOpen] = useState(false);
   async function save(input: Record<string, unknown>) {
     setBusy(true);
     setMessage("");
@@ -1465,6 +1468,21 @@ function SettingsView({ state: s, edit, mutate }: Props) {
   }
   return (
     <>
+      <section className="panel help-launcher">
+        <div>
+          <span className="eyebrow">HELP & SYSTEM MAP</span>
+          <h2>See how the whole company moves through Carnot</h2>
+          <p>
+            Follow fabric from supplier to jobworker to finished stock, learn
+            what every user can see, and check which pieces are still being
+            connected.
+          </p>
+        </div>
+        <button className="button primary" onClick={() => setHelpOpen(true)}>
+          <CircleHelp size={17} />
+          Open simple guide
+        </button>
+      </section>
       {s.user.role === "admin" && (
         <>
           <section className="panel settings-panel">
@@ -1728,6 +1746,9 @@ function SettingsView({ state: s, edit, mutate }: Props) {
         <p className="error" role="alert">
           {error}
         </p>
+      )}
+      {helpOpen && (
+        <SystemHelp role={s.user.role} onClose={() => setHelpOpen(false)} />
       )}
     </>
   );

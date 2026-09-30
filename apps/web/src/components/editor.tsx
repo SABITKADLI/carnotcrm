@@ -41,6 +41,7 @@ export function Editor({
   const type = request.type;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [newUserRole, setNewUserRole] = useState("jobworker");
   const [lines, setLines] = useState([
     { kind: "product", itemId: "", quantity: 1, price: 0 },
   ]);
@@ -57,6 +58,35 @@ export function Editor({
   const tailors = state.users
     .filter((u) => ["tailor", "jobworker"].includes(u.role) && u.active)
     .map((u) => ({ value: u.id, label: u.name }));
+  const linkedPartnerOptions =
+    newUserRole === "delivery"
+      ? state.people
+          .filter((person) =>
+            ["driver", "pickup", "delivery"].includes(person.role),
+          )
+          .map((person) => ({
+            value: person.id,
+            label: `${person.name} · person · ${person.role}`,
+          }))
+      : newUserRole === "admin"
+        ? []
+        : state.organizations
+            .filter((organization) => {
+              const accepted: Record<string, string[]> = {
+                supplier: ["supplier", "vendor"],
+                agent: ["agent"],
+                transporter: ["transporter"],
+                jobworker: ["jobworker"],
+                distributor: ["distributor"],
+              };
+              return organization.roles.some((role) =>
+                (accepted[newUserRole] || []).includes(role),
+              );
+            })
+            .map((organization) => ({
+              value: organization.id,
+              label: `${organization.name} · organization · ${organization.roles.join(", ")}`,
+            }));
   const select = (
     key: string,
     label: string,
@@ -320,13 +350,10 @@ export function Editor({
         ...select(
           "partnerId",
           "Linked partner record",
-          state.organizations.map((organization) => ({
-            value: organization.id,
-            label: `${organization.name} · ${organization.roles.join(", ")}`,
-          })),
+          linkedPartnerOptions,
         ),
         required: false,
-        hint: "Required for partner accounts; administrators may leave it blank.",
+        hint: "Required for partner accounts. Delivery access should link to a person; other partner roles link to an organization. Administrators leave this blank.",
       },
       {
         key: "password",
@@ -406,9 +433,18 @@ export function Editor({
                       "",
                   )}
                   required={f.required !== false}
+                  onChange={
+                    type === "user" && f.key === "role"
+                      ? (event) => setNewUserRole(event.target.value)
+                      : undefined
+                  }
                 >
-                  <option value="" disabled>
-                    Select {f.label.toLowerCase()}
+                  <option value="" disabled={f.required !== false}>
+                    {type === "user" &&
+                    f.key === "partnerId" &&
+                    newUserRole === "admin"
+                      ? "No partner link needed"
+                      : `Select ${f.label.toLowerCase()}`}
                   </option>
                   {f.options.map((o) => (
                     <option key={o.value} value={o.value}>
