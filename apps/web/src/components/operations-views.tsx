@@ -57,6 +57,56 @@ const Table = ({
     </table>
   </div>
 );
+const PAGE_SIZE = 50;
+const paginate = <T,>(items: T[], requestedPage: number) => {
+  const page = Math.min(
+    requestedPage,
+    Math.max(1, Math.ceil(items.length / PAGE_SIZE)),
+  );
+  return {
+    page,
+    items: items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+  };
+};
+function Pager({
+  total,
+  page,
+  setPage,
+}: {
+  total: number;
+  page: number;
+  setPage: (page: number) => void;
+}) {
+  const pages = Math.ceil(total / PAGE_SIZE);
+  if (pages <= 1) return null;
+  return (
+    <div className="pagination">
+      <span>
+        Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)}{" "}
+        of {total}
+      </span>
+      <div>
+        <button
+          className="button secondary small"
+          disabled={page <= 1}
+          onClick={() => setPage(page - 1)}
+        >
+          Previous
+        </button>
+        <span>
+          Page {page} of {pages}
+        </span>
+        <button
+          className="button secondary small"
+          disabled={page >= pages}
+          onClick={() => setPage(page + 1)}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function OperationsViews({
   view,
@@ -65,6 +115,7 @@ export function OperationsViews({
   mutate,
   refresh,
 }: Props) {
+  const [page, setPage] = useState(1);
   const match = (...values: unknown[]) =>
     values.join(" ").toLowerCase().includes(query.toLowerCase());
   if (view === "overview") return <OperationsDashboard state={state} />;
@@ -80,6 +131,7 @@ export function OperationsViews({
         order.status,
       ),
     );
+    const visible = paginate(orders, page);
     return (
       <>
         {state.user.role === "admin" && (
@@ -104,7 +156,7 @@ export function OperationsViews({
                 "",
               ]}
             >
-              {orders.slice(0, 300).map((order) => (
+              {visible.items.map((order) => (
                 <tr key={order.id}>
                   <td>
                     <strong>{order.poNumber}</strong>
@@ -223,6 +275,7 @@ export function OperationsViews({
               Upload the company workbook or change your search.
             </Empty>
           )}
+          <Pager total={orders.length} page={visible.page} setPage={setPage} />
         </section>
       </>
     );
@@ -240,6 +293,7 @@ export function OperationsViews({
         item.transportName,
       ),
     );
+    const visible = paginate(movements, page);
     return (
       <>
         {state.user.role === "admin" && (
@@ -285,7 +339,7 @@ export function OperationsViews({
                 "Print",
               ]}
             >
-              {movements.slice(0, 400).map((item) => (
+              {visible.items.map((item) => (
                 <tr key={item.id}>
                   <td>
                     <strong>{item.outwardDcNumber}</strong>
@@ -360,6 +414,11 @@ export function OperationsViews({
           ) : (
             <Empty title="No transport records found" />
           )}
+          <Pager
+            total={movements.length}
+            page={visible.page}
+            setPage={setPage}
+          />
         </section>
       </>
     );
@@ -377,6 +436,7 @@ export function OperationsViews({
           item.status,
         ),
     );
+    const visible = paginate(work, page);
     return (
       <>
         {state.user.role === "admin" && (
@@ -401,7 +461,7 @@ export function OperationsViews({
                 "Update",
               ]}
             >
-              {work.slice(0, 300).map((item) => (
+              {visible.items.map((item) => (
                 <tr key={item.id}>
                   <td>
                     <strong>{item.woNumber}</strong>
@@ -550,6 +610,7 @@ export function OperationsViews({
           ) : (
             <Empty title="No active work orders found" />
           )}
+          <Pager total={work.length} page={visible.page} setPage={setPage} />
         </section>
       </>
     );
@@ -563,6 +624,7 @@ export function OperationsViews({
         item.archived &&
         match(item.woNumber, item.dcNumber, item.jobworkerName, item.itemName),
     );
+    const visible = paginate(cleared, page);
     return (
       <section className="panel operations-panel">
         <SectionTitle title="Cleared lots and inward">
@@ -584,7 +646,7 @@ export function OperationsViews({
               "Days",
             ]}
           >
-            {cleared.slice(0, 300).map((item) => {
+            {visible.items.map((item) => {
               const inward = inwardByWo.get(item.id);
               const total = inward?.totalInward || 0;
               return (
@@ -624,6 +686,7 @@ export function OperationsViews({
         ) : (
           <Empty title="No cleared lots found" />
         )}
+        <Pager total={cleared.length} page={visible.page} setPage={setPage} />
       </section>
     );
   }
@@ -765,9 +828,11 @@ function MasterData({
   query: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(1);
   const partners = state.organizations.filter((item) =>
     JSON.stringify(item).toLowerCase().includes(query.toLowerCase()),
   );
+  const visible = paginate(partners, page);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -837,7 +902,7 @@ function MasterData({
           </form>
         )}
         <Table headings={["Name", "Roles", "Contact", "GSTIN", "Source"]}>
-          {partners.slice(0, 400).map((item) => (
+          {visible.items.map((item) => (
             <tr key={item.id}>
               <td>
                 <strong>{item.name}</strong>
@@ -860,6 +925,7 @@ function MasterData({
             </tr>
           ))}
         </Table>
+        <Pager total={partners.length} page={visible.page} setPage={setPage} />
       </section>
     </>
   );

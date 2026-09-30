@@ -77,6 +77,7 @@ type ParsedWorkbook = {
     {
       version: number;
       hash: string;
+      rowHash: string;
       sheet: string;
       row: number;
       legacyId: string;
@@ -315,8 +316,41 @@ export async function parseWorkbook(
         row: number(row, 5),
         legacyId: text(row, 6),
         hash: text(row, 7),
+        rowHash: text(row, 8) || text(row, 7),
       };
     }
+  const baselineByLocation = new Map<string, string>();
+  for (const key of Object.keys(baseline)) {
+    const separator = key.indexOf(":");
+    const kind = key.slice(0, separator);
+    const id = key.slice(separator + 1);
+    const prior = baseline[key];
+    if (prior.sheet && prior.row)
+      baselineByLocation.set(`${kind}:${prior.sheet}:${prior.row}`, id);
+  }
+  const claimedSyncIds = new Set<string>();
+  const syncedId = (
+    kind: ImportableKind,
+    sheet: string,
+    row: number,
+    fallback: string,
+    embedded = "",
+  ) => {
+    const candidates = [
+      embedded,
+      baselineByLocation.get(`${kind}:${sheet}:${row}`) || "",
+    ];
+    for (const candidate of candidates)
+      if (
+        candidate &&
+        baseline[`${kind}:${candidate}`] &&
+        !claimedSyncIds.has(`${kind}:${candidate}`)
+      ) {
+        claimedSyncIds.add(`${kind}:${candidate}`);
+        return candidate;
+      }
+    return fallback;
+  };
   const issues: ImportIssue[] = [];
   const organizations = new Map<string, Organization>();
   const people = new Map<string, Person>();
@@ -488,7 +522,13 @@ export async function parseWorkbook(
     const status = "Ordered" as FabricOrderStatus;
     orders.push({
       ...traced(
-        stableId("fpo", `${poNumber || "row"}:${row.number}`),
+        syncedId(
+          "fabricOrders",
+          "FABRIC ORDERS",
+          row.number,
+          stableId("fpo", `${poNumber || "row"}:${row.number}`),
+          text(row, 26),
+        ),
         "FABRIC ORDERS",
         row.number,
         poNumber,
@@ -593,7 +633,13 @@ export async function parseWorkbook(
     const price = linkedOrder?.pricePerMetre || number(row, 19);
     transports.push({
       ...traced(
-        stableId("tm", `TRANSPORT:${row.number}:${dcNumber}`),
+        syncedId(
+          "transports",
+          "TRANSPORT",
+          row.number,
+          stableId("tm", `TRANSPORT:${row.number}:${dcNumber}`),
+          text(row, 21),
+        ),
         "TRANSPORT",
         row.number,
         `${dcNumber}:${row.number}`,
@@ -737,6 +783,13 @@ export async function parseWorkbook(
     (candidate) => !!text(candidate, 1) && !!text(candidate, 4),
   )) {
     const record = productionRow(row, "PRODUCTION", org, brands, challans);
+    record.id = syncedId(
+      "workOrders",
+      "PRODUCTION",
+      row.number,
+      record.id,
+      text(row, 62),
+    );
     const values = Object.fromEntries(
       Array.from({ length: 61 }, (_, index) => [
         index + 1,
@@ -764,6 +817,13 @@ export async function parseWorkbook(
     (candidate) => !!text(candidate, 1) && !!text(candidate, 4),
   )) {
     const record = productionRow(row, "CLEARED LOTS", org, brands, challans);
+    record.id = syncedId(
+      "workOrders",
+      "CLEARED LOTS",
+      row.number,
+      record.id,
+      text(row, 69),
+    );
     const values = Object.fromEntries(
       Array.from({ length: 68 }, (_, index) => [
         index + 1,
@@ -790,7 +850,13 @@ export async function parseWorkbook(
     const total = setwise + mix + damage;
     inwards.push({
       ...traced(
-        stableId("inward", `${record.id}:${row.number}`),
+        syncedId(
+          "inwards",
+          "CLEARED LOTS",
+          row.number,
+          stableId("inward", `${record.id}:${row.number}`),
+          text(row, 70),
+        ),
         "CLEARED LOTS",
         row.number,
         record.woNumber,
@@ -900,13 +966,23 @@ export async function previewWorkbook(
     ? "sync"
     : "replace";
   const conflicts: SyncConflict[] = [];
+  const syncInputKinds = new Set<ImportableKind>([
+    "organizations",
+    "fabricSpecs",
+    "fabricOrders",
+    "transports",
+    "workOrders",
+    "inwards",
+    "brands",
+    "referenceValues",
+  ]);
   if (mode === "sync" && Object.keys(parsed.baseline).length) {
     await withStore(() => {
       for (const [kind, values] of Object.entries(parsed.records) as [
         ImportableKind,
         ExtractRecord<ImportableKind>[],
       ][]) {
-        if (["importIssues", "syncConflicts"].includes(kind)) continue;
+        if (!syncInputKinds.has(kind)) continue;
         type SyncRecord = {
           id: string;
           version: number;
@@ -928,7 +1004,7 @@ export async function previewWorkbook(
           if (!current || !prior) continue;
           const portalChanged =
             current.version > prior.version || syncHash(current) !== prior.hash;
-          const workbookChanged = workbookRecord.sourceHash !== prior.hash;
+          const workbookChanged = workbookRecord.sourceHash !== prior.rowHash;
           if (
             portalChanged &&
             workbookChanged &&
@@ -1177,7 +1253,12 @@ const headers = {
     "Value (₹)",
   ],
 };
-const styleSheet = (sheet: Worksheet, title: string, columns: number) => {
+const styleSheet = (
+  sheet: Worksheet,
+  title: string,
+  columns: number,
+  headerRow = 2,
+) => {
   sheet.mergeCells(1, 1, 1, columns);
   const titleCell = sheet.getCell(1, 1);
   titleCell.value = title;
@@ -1189,7 +1270,7 @@ const styleSheet = (sheet: Worksheet, title: string, columns: number) => {
   };
   titleCell.alignment = { vertical: "middle" };
   sheet.getRow(1).height = 30;
-  const header = sheet.getRow(2);
+  const header = sheet.getRow(headerRow);
   header.font = { bold: true, color: { argb: "FF26342E" } };
   header.fill = {
     type: "pattern",
@@ -1198,10 +1279,10 @@ const styleSheet = (sheet: Worksheet, title: string, columns: number) => {
   };
   header.alignment = { vertical: "middle", wrapText: true };
   header.height = 32;
-  sheet.views = [{ state: "frozen", ySplit: 2 }];
+  sheet.views = [{ state: "frozen", ySplit: headerRow }];
   sheet.autoFilter = {
-    from: { row: 2, column: 1 },
-    to: { row: 2, column: columns },
+    from: { row: headerRow, column: 1 },
+    to: { row: headerRow, column: columns },
   };
   sheet.columns.forEach((column) => {
     column.width = 18;
@@ -1212,6 +1293,13 @@ const addRows = (sheet: Worksheet, values: unknown[][]) =>
 
 export async function exportWorkbook(): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
+  const syncLocations = new Map<string, { sheet: string; row: number }>();
+  const track = (
+    kind: ImportableKind,
+    id: string,
+    sheet: string,
+    row: number,
+  ) => syncLocations.set(`${kind}:${id}`, { sheet, row });
   workbook.creator = "Carnot CRM";
   workbook.created = new Date();
   const master = workbook.addWorksheet("MASTER DATA");
@@ -1288,10 +1376,9 @@ export async function exportWorkbook(): Promise<Buffer> {
   styleSheet(master, "MASTER DATA | Singal Fabrics", masterHeaders.length);
   const orderSheet = workbook.addWorksheet("FABRIC ORDERS");
   orderSheet.addRow(["FABRIC ORDERS | Singal Fabrics"]);
-  orderSheet.addRow(headers.fabricOrders);
-  addRows(
-    orderSheet,
-    all("fabricOrders").map((o) => [
+  orderSheet.addRow([...headers.fabricOrders, "_CARNOT_ID"]);
+  all("fabricOrders").forEach((o) => {
+    const row = orderSheet.addRow([
       o.orderBy,
       o.orderDate,
       o.poNumber,
@@ -1317,19 +1404,21 @@ export async function exportWorkbook(): Promise<Buffer> {
       o.status,
       o.remarks,
       o.fabricValue,
-    ]),
-  );
+      o.id,
+    ]);
+    track("fabricOrders", o.id, "FABRIC ORDERS", row.number);
+  });
   styleSheet(
     orderSheet,
     "FABRIC ORDERS | Singal Fabrics",
     headers.fabricOrders.length,
   );
+  orderSheet.getColumn(headers.fabricOrders.length + 1).hidden = true;
   const transportSheet = workbook.addWorksheet("TRANSPORT");
   transportSheet.addRow(["TRANSPORT | Singal Fabrics"]);
-  transportSheet.addRow(headers.transport);
-  addRows(
-    transportSheet,
-    all("transports").map((m) => [
+  transportSheet.addRow([...headers.transport, "_CARNOT_ID"]);
+  all("transports").forEach((m) => {
+    const row = transportSheet.addRow([
       m.poNumber,
       m.fabricName,
       m.supplierName,
@@ -1350,13 +1439,16 @@ export async function exportWorkbook(): Promise<Buffer> {
       m.remarks,
       m.pricePerMetre,
       m.value,
-    ]),
-  );
+      m.id,
+    ]);
+    track("transports", m.id, "TRANSPORT", row.number);
+  });
   styleSheet(
     transportSheet,
     "TRANSPORT | Singal Fabrics",
     headers.transport.length,
   );
+  transportSheet.getColumn(headers.transport.length + 1).hidden = true;
   const productionHeaders = [
     "DC No.",
     "Jobworker Name",
@@ -1417,18 +1509,21 @@ export async function exportWorkbook(): Promise<Buffer> {
   ];
   const production = workbook.addWorksheet("PRODUCTION");
   production.addRow(["PRODUCTION (ACTIVE WOs) | Singal Fabrics"]);
-  production.addRow(productionHeaders);
-  addRows(
-    production,
-    all("workOrders")
-      .filter((item) => !item.archived)
-      .map(productionValues),
-  );
+  production.addRow([]);
+  production.addRow([...productionHeaders, "_CARNOT_ID"]);
+  all("workOrders")
+    .filter((item) => !item.archived)
+    .forEach((item) => {
+      const row = production.addRow([...productionValues(item), item.id]);
+      track("workOrders", item.id, "PRODUCTION", row.number);
+    });
   styleSheet(
     production,
     "PRODUCTION (ACTIVE WOs) | Singal Fabrics",
     productionHeaders.length,
+    3,
   );
+  production.getColumn(productionHeaders.length + 1).hidden = true;
   const cleared = workbook.addWorksheet("CLEARED LOTS");
   const clearedHeaders = [
     ...productionHeaders.slice(0, 60),
@@ -1442,31 +1537,72 @@ export async function exportWorkbook(): Promise<Buffer> {
     "Damage Pcs %",
   ];
   cleared.addRow(["CLEARED LOTS | Singal Fabrics"]);
-  cleared.addRow(clearedHeaders);
-  const inwardByWo = new Map(
-    all("inwards").map((item) => [item.workOrderId, item]),
-  );
-  addRows(
+  cleared.addRow([]);
+  cleared.addRow([
+    ...clearedHeaders,
+    "_CARNOT_WORK_ORDER_ID",
+    "_CARNOT_INWARD_ID",
+  ]);
+  const inwardsByWo = new Map<string, ProductionInward[]>();
+  for (const inward of all("inwards"))
+    inwardsByWo.set(inward.workOrderId, [
+      ...(inwardsByWo.get(inward.workOrderId) || []),
+      inward,
+    ]);
+  all("workOrders")
+    .filter((item) => item.archived)
+    .forEach((o) => {
+      const inwardRecords = inwardsByWo.get(o.id) || [];
+      const inward = {
+        inwardDate:
+          inwardRecords
+            .map((item) => item.inwardDate)
+            .filter(Boolean)
+            .sort()
+            .at(-1) || "",
+        setwiseQuantity: inwardRecords.reduce(
+          (sum, item) => sum + item.setwiseQuantity,
+          0,
+        ),
+        mixPiecesQuantity: inwardRecords.reduce(
+          (sum, item) => sum + item.mixPiecesQuantity,
+          0,
+        ),
+        damagePiecesQuantity: inwardRecords.reduce(
+          (sum, item) => sum + item.damagePiecesQuantity,
+          0,
+        ),
+        totalInward: inwardRecords.reduce(
+          (sum, item) => sum + item.totalInward,
+          0,
+        ),
+      };
+      const total = inward.totalInward;
+      const row = cleared.addRow([
+        ...productionValues(o).slice(0, 60),
+        inward.inwardDate,
+        inward.setwiseQuantity,
+        inward.mixPiecesQuantity,
+        inward.damagePiecesQuantity,
+        total,
+        total ? o.bodyFabric / total : "",
+        total ? (inward.mixPiecesQuantity / total) * 100 : "",
+        total ? (inward.damagePiecesQuantity / total) * 100 : "",
+        o.id,
+        inwardRecords.length === 1 ? inwardRecords[0].id : "",
+      ]);
+      track("workOrders", o.id, "CLEARED LOTS", row.number);
+      if (inwardRecords.length === 1)
+        track("inwards", inwardRecords[0].id, "CLEARED LOTS", row.number);
+    });
+  styleSheet(
     cleared,
-    all("workOrders")
-      .filter((item) => item.archived)
-      .map((o) => {
-        const inward = inwardByWo.get(o.id);
-        const total = inward?.totalInward || 0;
-        return [
-          ...productionValues(o).slice(0, 60),
-          inward?.inwardDate || "",
-          inward?.setwiseQuantity || 0,
-          inward?.mixPiecesQuantity || 0,
-          inward?.damagePiecesQuantity || 0,
-          total,
-          total ? o.bodyFabric / total : "",
-          total ? (inward!.mixPiecesQuantity / total) * 100 : "",
-          total ? (inward!.damagePiecesQuantity / total) * 100 : "",
-        ];
-      }),
+    "CLEARED LOTS | Singal Fabrics",
+    clearedHeaders.length,
+    3,
   );
-  styleSheet(cleared, "CLEARED LOTS | Singal Fabrics", clearedHeaders.length);
+  cleared.getColumn(clearedHeaders.length + 1).hidden = true;
+  cleared.getColumn(clearedHeaders.length + 2).hidden = true;
   const dashboard = workbook.addWorksheet("DASHBOARD");
   dashboard.addRow(["SINGAL FABRICS — OPERATIONS DASHBOARD"]);
   dashboard.addRow(["Generated", new Date().toISOString()]);
@@ -1500,7 +1636,25 @@ export async function exportWorkbook(): Promise<Buffer> {
       all("importIssues").filter((i) => !i.resolved).length,
     ],
   ]);
-  styleSheet(dashboard, "SINGAL FABRICS — OPERATIONS DASHBOARD", 2);
+  styleSheet(dashboard, "SINGAL FABRICS — OPERATIONS DASHBOARD", 2, 4);
+  const visibleWorkbook = Buffer.from(await workbook.xlsx.writeBuffer());
+  const visibleRecords = await parseWorkbook(visibleWorkbook, "export");
+  const rowHashesById = new Map<string, string>();
+  const rowHashesByLocation = new Map<string, string>();
+  for (const [kind, values] of Object.entries(visibleRecords.records) as [
+    ImportableKind,
+    ExtractRecord<ImportableKind>[] | undefined,
+  ][]) {
+    for (const record of values || []) {
+      if (!("sourceHash" in record)) continue;
+      rowHashesById.set(`${kind}:${record.id}`, record.sourceHash || "");
+      if (record.sourceSheet && record.sourceRow)
+        rowHashesByLocation.set(
+          `${kind}:${record.sourceSheet}:${record.sourceRow}`,
+          record.sourceHash || "",
+        );
+    }
+  }
   const sync = workbook.addWorksheet("_CARNOT_SYNC");
   sync.state = "veryHidden";
   sync.addRow([
@@ -1511,18 +1665,28 @@ export async function exportWorkbook(): Promise<Buffer> {
     "Source Row",
     "Legacy ID",
     "Baseline Hash",
+    "Workbook Row Hash",
   ]);
   for (const kind of operationalKinds)
-    for (const record of all(kind))
+    for (const record of all(kind)) {
+      const location = syncLocations.get(`${kind}:${record.id}`);
+      const sourceSheet =
+        location?.sheet || ("sourceSheet" in record ? record.sourceSheet : "");
+      const sourceRow =
+        location?.row || ("sourceRow" in record ? record.sourceRow : 0);
       sync.addRow([
         kind,
         record.id,
         "version" in record ? record.version : 1,
-        "sourceSheet" in record ? record.sourceSheet : "",
-        "sourceRow" in record ? record.sourceRow : "",
+        sourceSheet,
+        sourceRow,
         "legacyId" in record ? record.legacyId : "",
         syncHash(record),
+        rowHashesById.get(`${kind}:${record.id}`) ||
+          rowHashesByLocation.get(`${kind}:${sourceSheet}:${sourceRow}`) ||
+          syncHash(record),
       ]);
+    }
   const output = await workbook.xlsx.writeBuffer();
   return Buffer.from(output);
 }
