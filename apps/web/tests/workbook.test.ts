@@ -23,7 +23,7 @@ test("workbook parser maps source columns, dates, calculated values and inward d
     "",
     "Maker A",
     "",
-    "Party A",
+    "Party A, Party B",
     "",
     "Carnot",
     "Pending",
@@ -53,7 +53,7 @@ test("workbook parser maps source columns, dates, calculated values and inward d
     "2",
     "4",
     1000,
-    "Party A",
+    "Party A, Party B",
     "Garment",
     0,
     "Ordered",
@@ -199,6 +199,13 @@ test("workbook parser maps source columns, dates, calculated values and inward d
     "sync_test",
   );
   assert.equal(parsed.counts.fabricSpecs, 1);
+  assert.ok(
+    parsed.records.organizations?.some((item) => item.name === "Party A"),
+  );
+  assert.ok(
+    parsed.records.organizations?.some((item) => item.name === "Party B"),
+  );
+  assert.equal(parsed.records.fabricOrders?.[0].partyIds?.length, 2);
   assert.equal(parsed.counts.fabricOrders, 1);
   assert.equal(parsed.counts.transports, 1);
   assert.equal(parsed.counts.sourceActiveWorkOrders, 1);

@@ -433,7 +433,13 @@ export async function parseWorkbook(
       org(text(r, column), role),
     );
   list(13, "jobworker");
-  list(15, "distributor");
+  rows(master, 3, (r) => !!text(r, 15)).forEach((row) => {
+    text(row, 15)
+      .split(/[,;\n]+/)
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .forEach((name) => org(name, "distributor"));
+  });
   rows(master, 3, (r) => !!text(r, 17)).forEach((row) => {
     const name = text(row, 17);
     const key = normalized(name);
@@ -512,6 +518,11 @@ export async function parseWorkbook(
     )
       continue;
     const supplier = org(supplierName, "supplier");
+    const partyIds = purposeParty
+      .split(/[,;\n]+/)
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .map((name) => org(name, "distributor").id);
     const agentName =
       text(row, 13) ||
       (spec?.agentId ? organizations.get(spec.agentId)?.name || "" : "");
@@ -557,6 +568,7 @@ export async function parseWorkbook(
       colors: text(row, 18),
       quantityOrdered,
       purposeParty,
+      partyIds,
       fabricFor,
       receivedMetres: 0,
       cancelledMetres: 0,

@@ -15,6 +15,9 @@ import type {
   Product,
   Purchase,
   User,
+  FabricOrder,
+  FabricSpec,
+  Organization,
 } from "../src/lib/types";
 
 process.env.CRM_DATABASE_PATH = ":memory:";
@@ -160,6 +163,69 @@ test("partial purchasing receipt changes stock exactly once on retry", () => {
   assert.equal(get("purchases", po.id).status, "partial");
   assert.throws(() => run("receive", { id: po.id, quantity: 31 }), /exceeds/);
   assert.equal(get("fabrics", fabric.id).stock, 120000);
+});
+test("fabric PO status, receipts, and linked delivery challans reconcile quantities", () => {
+  const partner = (
+    name: string,
+    role: "supplier" | "distributor" | "jobworker" | "transporter",
+  ) => run<Organization>("organization", { name, roles: [role] });
+  const mill = partner("Mill One", "supplier");
+  const party = partner("Party One", "distributor");
+  const maker = partner("Maker One", "jobworker");
+  const carrier = partner("Carrier One", "transporter");
+  const spec = put("fabricSpecs", {
+    id: "fs_test",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1,
+    name: "Oxford",
+    rangeName: "Classic",
+    width: "58",
+    folding: "Open",
+    weave: "Plain",
+    threadCount: "40s",
+    construction: "120x80",
+    content: "Cotton",
+    supplierId: mill.id,
+  } satisfies FabricSpec);
+  const po = run<FabricOrder>("fabricOrder", {
+    fabricSpecId: spec.id,
+    orderDate: "2026-09-01",
+    deliveryDate: "2026-09-20",
+    fabricType: "Shirting",
+    pricePerMetre: 100,
+    quantityOrdered: 100,
+    designs: "2",
+    colors: "4",
+    partyIds: [party.id],
+    fabricFor: "Garment",
+  });
+  run("fabricReceipt", {
+    fabricOrderId: po.id,
+    receiptDate: "2026-09-10",
+    quantityMetres: 40,
+    warehouse: "Singal Fabrics",
+    lrNumber: "LR-42",
+    transporterId: carrier.id,
+    numberOfBales: 2,
+    partyId: party.id,
+    jobworkerId: maker.id,
+    pickedBy: "Driver A",
+  });
+  assert.equal(get("fabricOrders", po.id).status, "Partial");
+  assert.equal(get("fabricOrders", po.id).receivedMetres, 40);
+  assert.equal(all("challans").length, 1);
+  assert.equal(all("transports")[0].lrNumber, "LR-42");
+  assert.throws(
+    () => run("fabricOrderStatus", { id: po.id, status: "Ordered" }),
+    /must be Partial or Received/,
+  );
+  run("fabricOrderStatus", {
+    id: po.id,
+    status: "Cancelled",
+    cancelledMetres: 60,
+  });
+  assert.equal(get("fabricOrders", po.id).cancelledMetres, 60);
 });
 test("reserved fabric cannot be sold and cancellation releases it", () => {
   const o = plan(order(95));

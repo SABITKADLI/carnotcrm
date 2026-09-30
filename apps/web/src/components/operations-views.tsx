@@ -16,6 +16,17 @@ import {
 import type { State } from "@/lib/types";
 import { Badge, Empty, SectionTitle } from "./ui";
 import type { Mutate } from "./editor";
+import {
+  EnhancedDashboard,
+  EnhancedFabricOrders,
+  EnhancedPartners,
+  EnhancedReports,
+  EnhancedTransport,
+  PeriodBar,
+  usePeriodSelection,
+  type OperationFilters,
+} from "./enhanced-operations";
+import { inPeriod } from "@/lib/period";
 
 type Props = {
   view: string;
@@ -23,6 +34,7 @@ type Props = {
   query: string;
   mutate: Mutate;
   refresh: () => Promise<void>;
+  filters?: OperationFilters;
 };
 const rupees = (value: number) =>
   new Intl.NumberFormat("en-IN", {
@@ -114,14 +126,37 @@ export function OperationsViews({
   query,
   mutate,
   refresh,
+  filters = {},
 }: Props) {
   const [page, setPage] = useState(1);
+  const period = usePeriodSelection(filters);
   const match = (...values: unknown[]) =>
     values.join(" ").toLowerCase().includes(query.toLowerCase());
-  if (view === "overview") return <OperationsDashboard state={state} />;
+  if (view === "overview")
+    return <EnhancedDashboard state={state} filters={filters} />;
   if (view === "master-data")
-    return <MasterData state={state} mutate={mutate} query={query} />;
-  if (view === "fabric-orders") {
+    return <EnhancedPartners state={state} mutate={mutate} query={query} />;
+  if (view === "suppliers")
+    return (
+      <EnhancedPartners
+        state={state}
+        mutate={mutate}
+        query={query}
+        suppliersOnly
+      />
+    );
+  if (view === "reports")
+    return <EnhancedReports state={state} filters={filters} />;
+  if (view === "fabric-orders")
+    return (
+      <EnhancedFabricOrders
+        state={state}
+        query={query}
+        mutate={mutate}
+        filters={filters}
+      />
+    );
+  if (view === "fabric-orders-legacy") {
     const orders = state.fabricOrders.filter((order) =>
       match(
         order.poNumber,
@@ -280,7 +315,16 @@ export function OperationsViews({
       </>
     );
   }
-  if (view === "transport-dc") {
+  if (view === "transport-dc")
+    return (
+      <>
+        {state.user.role === "admin" && (
+          <NewTransport state={state} mutate={mutate} />
+        )}
+        <EnhancedTransport state={state} query={query} filters={filters} />
+      </>
+    );
+  if (view === "transport-dc-legacy") {
     const challanById = new Map(
       state.challans.map((challan) => [challan.id, challan]),
     );
@@ -427,6 +471,14 @@ export function OperationsViews({
     const work = state.workOrders.filter(
       (item) =>
         !item.archived &&
+        (!filters.open || item.id === filters.open) &&
+        (!filters.age || item.ageingDays >= Number(filters.age)) &&
+        inPeriod(
+          item.issuedDate || item.fabricOutwardDate,
+          period.mode,
+          period.month,
+          period.fy,
+        ) &&
         match(
           item.woNumber,
           item.dcNumber,
@@ -439,6 +491,7 @@ export function OperationsViews({
     const visible = paginate(work, page);
     return (
       <>
+        <PeriodBar period={period} />
         {state.user.role === "admin" && (
           <NewWorkOrder state={state} mutate={mutate} />
         )}
@@ -619,75 +672,90 @@ export function OperationsViews({
     const inwardByWo = new Map(
       state.inwards.map((item) => [item.workOrderId, item]),
     );
+    const periodWorkOrderIds = new Set(
+      state.inwards
+        .filter((item) =>
+          inPeriod(item.inwardDate, period.mode, period.month, period.fy),
+        )
+        .map((item) => item.workOrderId),
+    );
     const cleared = state.workOrders.filter(
       (item) =>
         item.archived &&
+        periodWorkOrderIds.has(item.id) &&
         match(item.woNumber, item.dcNumber, item.jobworkerName, item.itemName),
     );
     const visible = paginate(cleared, page);
     return (
-      <section className="panel operations-panel">
-        <SectionTitle title="Cleared lots and inward">
-          Ordered, cut and inward quantities are reconciled with damage, mix and
-          consumption variance.
-        </SectionTitle>
-        {cleared.length ? (
-          <Table
-            headings={[
-              "WO / DC",
-              "Jobworker",
-              "Item",
-              "Expected",
-              "Cut",
-              "Inward",
-              "Short / excess",
-              "Damage / mix",
-              "Final consumption",
-              "Days",
-            ]}
-          >
-            {visible.items.map((item) => {
-              const inward = inwardByWo.get(item.id);
-              const total = inward?.totalInward || 0;
-              return (
-                <tr key={item.id}>
-                  <td>
-                    <strong>{item.woNumber}</strong>
-                    <small>{item.dcNumber}</small>
-                  </td>
-                  <td>{item.jobworkerName}</td>
-                  <td>{item.itemName}</td>
-                  <td>{Math.round(item.expectedQuantity)}</td>
-                  <td>{item.totalCutQuantity}</td>
-                  <td>
-                    {total || <Badge tone="amber">Awaiting quantity</Badge>}
-                  </td>
-                  <td>
-                    <Badge
-                      tone={total - item.totalCutQuantity < 0 ? "red" : "green"}
-                    >
-                      {total - item.totalCutQuantity}
-                    </Badge>
-                  </td>
-                  <td>
-                    {inward?.damagePiecesQuantity || 0} /{" "}
-                    {inward?.mixPiecesQuantity || 0}
-                  </td>
-                  <td>
-                    {total
-                      ? ((item.bodyFabric + item.trimFabric) / total).toFixed(3)
-                      : "—"}
-                  </td>
-                  <td>{item.ageingDays}</td>
-                </tr>
-              );
-            })}
-          </Table>
-        ) : (
-          <Empty title="No cleared lots found" />
-        )}
-        <Pager total={cleared.length} page={visible.page} setPage={setPage} />
-      </section>
+      <>
+        <PeriodBar period={period} />
+        <section className="panel operations-panel">
+          <SectionTitle title="Cleared lots and inward">
+            Ordered, cut and inward quantities are reconciled with damage, mix
+            and consumption variance.
+          </SectionTitle>
+          {cleared.length ? (
+            <Table
+              headings={[
+                "WO / DC",
+                "Jobworker",
+                "Item",
+                "Expected",
+                "Cut",
+                "Inward",
+                "Short / excess",
+                "Damage / mix",
+                "Final consumption",
+                "Days",
+              ]}
+            >
+              {visible.items.map((item) => {
+                const inward = inwardByWo.get(item.id);
+                const total = inward?.totalInward || 0;
+                return (
+                  <tr key={item.id}>
+                    <td>
+                      <strong>{item.woNumber}</strong>
+                      <small>{item.dcNumber}</small>
+                    </td>
+                    <td>{item.jobworkerName}</td>
+                    <td>{item.itemName}</td>
+                    <td>{Math.round(item.expectedQuantity)}</td>
+                    <td>{item.totalCutQuantity}</td>
+                    <td>
+                      {total || <Badge tone="amber">Awaiting quantity</Badge>}
+                    </td>
+                    <td>
+                      <Badge
+                        tone={
+                          total - item.totalCutQuantity < 0 ? "red" : "green"
+                        }
+                      >
+                        {total - item.totalCutQuantity}
+                      </Badge>
+                    </td>
+                    <td>
+                      {inward?.damagePiecesQuantity || 0} /{" "}
+                      {inward?.mixPiecesQuantity || 0}
+                    </td>
+                    <td>
+                      {total
+                        ? ((item.bodyFabric + item.trimFabric) / total).toFixed(
+                            3,
+                          )
+                        : "—"}
+                    </td>
+                    <td>{item.ageingDays}</td>
+                  </tr>
+                );
+              })}
+            </Table>
+          ) : (
+            <Empty title="No cleared lots found" />
+          )}
+          <Pager total={cleared.length} page={visible.page} setPage={setPage} />
+        </section>
+      </>
     );
   }
   if (view === "workbook-sync")
@@ -695,7 +763,7 @@ export function OperationsViews({
   return null;
 }
 
-function OperationsDashboard({ state }: { state: State }) {
+export function OperationsDashboard({ state }: { state: State }) {
   const active = state.workOrders.filter((item) => !item.archived),
     cleared = state.workOrders.filter((item) => item.archived);
   const totalInward = state.inwards.reduce(
@@ -818,7 +886,7 @@ function OperationsDashboard({ state }: { state: State }) {
   );
 }
 
-function MasterData({
+export function MasterData({
   state,
   mutate,
   query,

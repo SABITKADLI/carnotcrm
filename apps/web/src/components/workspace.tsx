@@ -31,9 +31,10 @@ import {
 import { type State } from "@/lib/types";
 import { Editor, type EditRequest } from "./editor";
 import { Views } from "./views";
-import { CuttingRoom, downloadCSV } from "./cutting-room";
+import { downloadCSV } from "./cutting-room";
 import { Progress } from "./ui";
 import { OperationsViews } from "./operations-views";
+import type { OperationFilters } from "./enhanced-operations";
 const navigation = [
   {
     id: "overview",
@@ -47,19 +48,17 @@ const navigation = [
   { id: "production", label: "Production", icon: Factory },
   { id: "cleared-lots", label: "Cleared lots", icon: ClipboardCheck },
   { id: "workbook-sync", label: "Workbook sync", icon: FileSpreadsheet },
-  { id: "orders", label: "Garment orders", icon: ShoppingBag },
+  { id: "orders", label: "Garment orders · Legacy", icon: ShoppingBag },
   { id: "cutting", label: "Cutting room", icon: Scissors },
-  { id: "garment-production", label: "Garment jobs", icon: Factory },
+  { id: "garment-production", label: "Garment jobs · Legacy", icon: Factory },
   {
-    id: "fabrics",
-    label: "Fabric library",
-    icon: Spool,
+    id: "products",
+    label: "Finished goods",
+    icon: Package,
     group: "MATERIALS & TRADE",
   },
-  { id: "purchases", label: "Purchase orders", icon: Truck },
-  { id: "products", label: "Finished goods", icon: Package },
   { id: "customers", label: "Customers", icon: Users },
-  { id: "suppliers", label: "Suppliers", icon: Truck },
+  { id: "suppliers", label: "Suppliers / Vendors", icon: Truck },
   {
     id: "invoices",
     label: "Billing & payments",
@@ -155,11 +154,17 @@ const actions: Record<string, [string, string]> = {
   purchases: ["New purchase", "purchase"],
   production: ["Assign work", "assign"],
   products: ["Bill & deliver", "invoice"],
-  customers: ["Add customer", "customer"],
-  suppliers: ["Add supplier", "supplier"],
   invoices: ["New invoice", "invoice"],
 };
-export function Workspace({ view, initial }: { view: string; initial: State }) {
+export function Workspace({
+  view,
+  initial,
+  initialFilters = {},
+}: {
+  view: string;
+  initial: State;
+  initialFilters?: OperationFilters;
+}) {
   const router = useRouter();
   const pendingOperations = useRef(new Map<string, string>());
   const [state, setState] = useState(initial);
@@ -203,6 +208,7 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
             syncRuns: current.syncRuns,
             syncConflicts: current.syncConflicts,
             operationalBackups: current.operationalBackups,
+            attachments: current.attachments,
           }));
         setConnected(true);
       } catch {
@@ -545,8 +551,17 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
               )}
             </div>
           )}
-          {view === "cutting" ? (
-            <CuttingRoom state={state} mutate={mutate} />
+          {["cutting", "customers"].includes(view) ? (
+            <section className="panel under-construction">
+              <span className="eyebrow">UNDER CONSTRUCTION</span>
+              <h2>
+                {view === "cutting" ? "Cutting room" : "Customer workspace"}
+              </h2>
+              <p>
+                This legacy area is being rebuilt around the fabric order and
+                production workflow. Its existing records remain preserved.
+              </p>
+            </section>
           ) : [
               "overview",
               "master-data",
@@ -555,6 +570,8 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
               "production",
               "cleared-lots",
               "workbook-sync",
+              "suppliers",
+              "reports",
             ].includes(view) ? (
             <OperationsViews
               view={view}
@@ -562,6 +579,7 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
               query={query}
               mutate={mutate}
               refresh={() => refresh(true)}
+              filters={initialFilters}
             />
           ) : (
             <Views

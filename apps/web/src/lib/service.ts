@@ -102,6 +102,9 @@ export function state(user: User, includeOperations = true): State {
     const allChallans = includeOperations ? all("challans") : [];
     const allWorkOrders = includeOperations ? all("workOrders") : [];
     const allInwards = includeOperations ? all("inwards") : [];
+    const allAttachments = includeOperations
+      ? all("attachments").filter((item) => !item.deletedAt)
+      : [];
     const partnerId = user.partnerId || "";
     const partnerName =
       organizations
@@ -224,6 +227,9 @@ export function state(user: User, includeOperations = true): State {
         syncRuns: [],
         syncConflicts: [],
         operationalBackups: [],
+        attachments: allAttachments.filter((attachment) =>
+          scopedFabricOrders.some((order) => order.id === attachment.entityId),
+        ),
         settings: { ...config, address: "", taxId: "", paymentDetails: "" },
         shopify: {
           configured: false,
@@ -275,6 +281,7 @@ export function state(user: User, includeOperations = true): State {
             counts: backup.counts,
           }))
         : [],
+      attachments: allAttachments,
       settings: config,
       shopify: {
         configured: !!(
@@ -699,6 +706,7 @@ function perform(user: User, action: string, input: Input): unknown {
         .array(
           z.enum([
             "supplier",
+            "vendor",
             "agent",
             "jobworker",
             "transporter",
@@ -723,6 +731,124 @@ function perform(user: User, action: string, input: Input): unknown {
       audit(user, "Saved partner", record.name, roles.join(", "));
       return record;
     }
+    case "fabricOrderUpdate": {
+      const order = get("fabricOrders", str(input.id));
+      const quantityOrdered = num(
+        input.quantityOrdered ?? order.quantityOrdered,
+        0.001,
+      );
+      const pricePerMetre = num(
+        input.pricePerMetre ?? order.pricePerMetre,
+        0.01,
+      );
+      if (order.receivedMetres + order.cancelledMetres > quantityOrdered)
+        throw new Error(
+          "Ordered metres cannot be below received and cancelled metres",
+        );
+      const supplierId = optional(input.supplierId, 100) || order.supplierId;
+      const supplier = get("organizations", supplierId);
+      const partyIds = Array.isArray(input.partyIds)
+        ? input.partyIds.map((value) => str(value, 100))
+        : order.partyIds || [];
+      const parties = partyIds.map((id) => get("organizations", id));
+      const updated = put("fabricOrders", {
+        ...order,
+        orderDate: input.orderDate ? date(input.orderDate) : order.orderDate,
+        deliveryDate: input.deliveryDate
+          ? date(input.deliveryDate)
+          : order.deliveryDate,
+        internalItemName:
+          input.internalItemName === undefined
+            ? order.internalItemName
+            : optional(input.internalItemName, 150),
+        fabricName:
+          input.fabricName === undefined
+            ? order.fabricName
+            : str(input.fabricName, 160),
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        fabricType:
+          input.fabricType === undefined
+            ? order.fabricType
+            : str(input.fabricType, 100),
+        pricePerMetre,
+        quantityOrdered,
+        designs:
+          input.designs === undefined ? order.designs : str(input.designs, 100),
+        colors:
+          input.colors === undefined ? order.colors : str(input.colors, 100),
+        purposeParty:
+          parties.length > 0
+            ? parties.map((party) => party.name).join(", ")
+            : input.purposeParty === undefined
+              ? order.purposeParty
+              : str(input.purposeParty, 500),
+        partyIds,
+        fabricFor:
+          input.fabricFor === undefined
+            ? order.fabricFor
+            : str(input.fabricFor, 100),
+        remarks:
+          input.remarks === undefined ? order.remarks : optional(input.remarks),
+        fabricValue: quantityOrdered * pricePerMetre,
+        version: order.version + 1,
+      });
+      audit(user, "Edited fabric purchase order", order.poNumber);
+      return updated;
+    }
+    case "fabricOrderStatus": {
+      const order = get("fabricOrders", str(input.id));
+      const status = z
+        .enum(["Ordered", "Partial", "Received", "Cancelled"])
+        .parse(input.status);
+      let receivedMetres =
+        input.receivedMetres === undefined || input.receivedMetres === ""
+          ? order.receivedMetres
+          : num(input.receivedMetres, 0, order.quantityOrdered);
+      let cancelledMetres =
+        input.cancelledMetres === undefined || input.cancelledMetres === ""
+          ? order.cancelledMetres
+          : num(input.cancelledMetres, 0, order.quantityOrdered);
+      if (status === "Received") {
+        receivedMetres = order.quantityOrdered - cancelledMetres;
+      } else if (
+        status === "Cancelled" &&
+        input.cancelledMetres === undefined
+      ) {
+        cancelledMetres = order.quantityOrdered - receivedMetres;
+      }
+      if (receivedMetres + cancelledMetres > order.quantityOrdered)
+        throw new Error(
+          "Received and cancelled metres cannot exceed ordered metres",
+        );
+      if (
+        status === "Partial" &&
+        !(receivedMetres > 0 && receivedMetres < order.quantityOrdered)
+      )
+        throw new Error(
+          "Partial orders require received metres between zero and the ordered quantity",
+        );
+      if (status === "Ordered" && receivedMetres > 0)
+        throw new Error("An order with receipts must be Partial or Received");
+      const voidOrder = z.coerce.boolean().catch(false).parse(input.void);
+      const updated = put("fabricOrders", {
+        ...order,
+        status,
+        receivedMetres,
+        cancelledMetres,
+        archived: voidOrder ? true : order.archived,
+        voidedAt: voidOrder ? new Date().toISOString() : order.voidedAt,
+        voidReason: voidOrder ? str(input.reason, 500) : order.voidReason,
+        version: order.version + 1,
+      });
+      audit(
+        user,
+        voidOrder ? "Voided fabric purchase order" : `Marked PO ${status}`,
+        order.poNumber,
+        optional(input.reason, 500),
+      );
+      return updated;
+    }
     case "fabricOrder": {
       const spec = get("fabricSpecs", str(input.fabricSpecId));
       const supplier = get("organizations", spec.supplierId);
@@ -737,6 +863,12 @@ function perform(user: User, action: string, input: Input): unknown {
       const agentName = spec.agentId
         ? get("organizations", spec.agentId).name
         : "";
+      const partyIds = Array.isArray(input.partyIds)
+        ? input.partyIds.map((value) => str(value, 100))
+        : [];
+      const purposeParty = partyIds.length
+        ? partyIds.map((id) => get("organizations", id).name).join(", ")
+        : str(input.purposeParty, 500);
       const order = put("fabricOrders", {
         ...base("fpo"),
         version: 1,
@@ -763,7 +895,8 @@ function perform(user: User, action: string, input: Input): unknown {
         designs: str(input.designs, 100),
         colors: str(input.colors, 100),
         quantityOrdered,
-        purposeParty: str(input.purposeParty, 160),
+        purposeParty,
+        partyIds,
         fabricFor: str(input.fabricFor, 100),
         receivedMetres: 0,
         cancelledMetres: 0,
@@ -960,11 +1093,15 @@ function perform(user: User, action: string, input: Input): unknown {
     }
     case "fabricReceipt": {
       const order = get("fabricOrders", str(input.fabricOrderId));
-      const quantityMetres = num(
-        input.quantityMetres,
-        0.001,
-        order.quantityOrdered - order.receivedMetres,
-      );
+      const outstanding =
+        order.quantityOrdered - order.receivedMetres - order.cancelledMetres;
+      if (outstanding <= 0)
+        throw new Error("This purchase order has no outstanding metres");
+      const quantityMetres = num(input.quantityMetres, 0.001, outstanding);
+      const transporterId = optional(input.transporterId, 100) || undefined;
+      const transporter = transporterId
+        ? get("organizations", transporterId)
+        : undefined;
       const receipt = put("fabricReceipts", {
         ...base("receipt"),
         version: 1,
@@ -974,13 +1111,27 @@ function perform(user: User, action: string, input: Input): unknown {
         warehouse: str(input.warehouse, 120),
         lotNumber: optional(input.lotNumber, 120),
         remarks: optional(input.remarks),
+        lrNumber: optional(input.lrNumber, 100),
+        lrDate: optional(input.lrDate, 10),
+        transporterId,
+        transportName: transporter?.name || "",
+        numberOfBales: input.numberOfBales
+          ? integer(input.numberOfBales, 1)
+          : 0,
+        sourceLocation:
+          optional(input.sourceLocation, 200) || order.supplierName,
+        destinationLocation:
+          optional(input.destinationLocation, 200) || str(input.warehouse, 120),
+        dispatchDetails: optional(input.dispatchDetails),
       });
       const receivedMetres = order.receivedMetres + quantityMetres;
       put("fabricOrders", {
         ...order,
         receivedMetres,
         status:
-          receivedMetres >= order.quantityOrdered ? "Received" : "Partial",
+          receivedMetres + order.cancelledMetres >= order.quantityOrdered
+            ? "Received"
+            : "Partial",
         version: order.version + 1,
       });
       put("movements", {
@@ -994,6 +1145,28 @@ function perform(user: User, action: string, input: Input): unknown {
         toLocation: receipt.warehouse,
       });
       audit(user, "Received fabric", order.poNumber, `${quantityMetres} m`);
+      if (input.jobworkerId && input.partyId && transporterId) {
+        const challan = perform(user, "transport", {
+          fabricOrderId: order.id,
+          supplierId: order.supplierId,
+          partyId: input.partyId,
+          jobworkerId: input.jobworkerId,
+          transporterId,
+          fabricQuantity: input.transportQuantity || quantityMetres,
+          numberOfBales: input.numberOfBales || 1,
+          pickedBy: input.pickedBy || user.name,
+          lrNumber: input.lrNumber || "",
+          lrDate: input.lrDate || "",
+          dcIssueDate: input.dispatchDate || input.receiptDate,
+          remarks: input.remarks || "",
+        }) as { id: string; lines: Array<{ transportMovementId?: string }> };
+        return put("fabricReceipts", {
+          ...receipt,
+          challanId: challan.id,
+          transportMovementId: challan.lines[0]?.transportMovementId,
+          version: receipt.version + 1,
+        });
+      }
       return receipt;
     }
     case "importIssue": {

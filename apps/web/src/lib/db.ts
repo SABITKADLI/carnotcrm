@@ -61,6 +61,7 @@ const kinds: Kind[] = [
   "syncRuns",
   "syncConflicts",
   "operationalBackups",
+  "attachments",
 ];
 
 const defaults: Settings = {

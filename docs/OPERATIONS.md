@@ -61,3 +61,9 @@ Mutation/audit records are retained. Plan data retention and offsite backup acce
 ## Validation
 
 `npm test` exercises the domain and mocked external integration. `node scripts/smoke.mjs` checks the running demo through HTTP. CI runs install, lint, types, tests and production build. Browser interaction, live Shopify configuration and your hosting environment still require acceptance testing before rollout to staff.
+
+# Purchase-order attachments
+
+Carnot uploads PO attachments directly to a private Amazon S3 bucket with short-lived signed URLs. Configure `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `S3_BUCKET_NAME`; the optional prefix defaults to `carnot/attachments` and signed URLs default to five minutes.
+
+Grant the application IAM identity `s3:PutObject` and `s3:GetObject` for `<bucket>/<prefix>/*`. Keep Block Public Access enabled. Add a bucket CORS rule that permits `PUT` from the exact Carnot portal origin (and localhost during development), allows the `Content-Type` header, and permits `GET` if downloads are opened directly. Files are limited to JPEG, PNG, WebP, and PDF with a 10 MB maximum. Deleting in Carnot soft-deletes the database record so the audit trail remains intact; lifecycle cleanup can remove orphaned S3 objects later.

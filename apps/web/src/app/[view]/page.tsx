@@ -26,8 +26,10 @@ const views = [
 ];
 export default async function WorkspacePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ view: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { view } = await params;
   if (!views.includes(view)) notFound();
@@ -46,5 +48,19 @@ export default async function WorkspacePage({
     if (!(allowed[user.role] || []).includes(view))
       redirect(`/${allowed[user.role]?.[0] || "settings"}`);
   }
-  return <Workspace key={view} view={view} initial={await state(user)} />;
+  const rawFilters = await searchParams;
+  const initialFilters = Object.fromEntries(
+    Object.entries(rawFilters).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? value[0] : value,
+    ]),
+  );
+  return (
+    <Workspace
+      key={view}
+      view={view}
+      initial={await state(user)}
+      initialFilters={initialFilters}
+    />
+  );
 }

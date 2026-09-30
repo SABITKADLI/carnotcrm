@@ -231,6 +231,7 @@ export interface SourceTrace {
 }
 export type OrganizationRole =
   | "supplier"
+  | "vendor"
   | "agent"
   | "jobworker"
   | "transporter"
@@ -292,6 +293,7 @@ export interface FabricOrder extends Base, SourceTrace {
   colors: string;
   quantityOrdered: number;
   purposeParty: string;
+  partyIds?: string[];
   fabricFor: string;
   receivedMetres: number;
   cancelledMetres: number;
@@ -302,6 +304,8 @@ export interface FabricOrder extends Base, SourceTrace {
   supplierDeliveryEstimate?: string;
   supplierNotes?: string;
   dispatchDetails?: string;
+  voidedAt?: string;
+  voidReason?: string;
 }
 export interface FabricReceipt extends Base, SourceTrace {
   fabricOrderId: string;
@@ -310,6 +314,26 @@ export interface FabricReceipt extends Base, SourceTrace {
   warehouse: string;
   lotNumber: string;
   remarks: string;
+  lrNumber?: string;
+  lrDate?: string;
+  transporterId?: string;
+  transportName?: string;
+  numberOfBales?: number;
+  sourceLocation?: string;
+  destinationLocation?: string;
+  dispatchDetails?: string;
+  transportMovementId?: string;
+  challanId?: string;
+}
+export interface Attachment extends Base {
+  entityKind: "fabricOrder";
+  entityId: string;
+  fileName: string;
+  contentType: "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
+  sizeBytes: number;
+  s3Key: string;
+  uploadedBy: string;
+  deletedAt?: string;
 }
 export type DeliveryChallanStatus =
   | "Draft"
@@ -520,6 +544,7 @@ export interface Entities {
   syncRuns: SyncRun;
   syncConflicts: SyncConflict;
   operationalBackups: OperationalBackup;
+  attachments: Attachment;
 }
 export type Kind = keyof Entities;
 export interface State {
@@ -550,6 +575,7 @@ export interface State {
   syncRuns: SyncRun[];
   syncConflicts: SyncConflict[];
   operationalBackups: Array<Omit<OperationalBackup, "payload">>;
+  attachments: Attachment[];
   settings: Settings;
   shopify: {
     configured: boolean;

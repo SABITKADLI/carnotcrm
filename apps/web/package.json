@@ -15,9 +15,12 @@
     "demo": "node scripts/demo.mjs",
     "admin:create": "tsx scripts/admin.ts",
     "db:backup": "tsx scripts/backup.ts",
-    "workbook:import": "tsx scripts/import-workbook.ts"
+    "workbook:import": "tsx scripts/import-workbook.ts",
+    "partners:normalize": "tsx scripts/normalize-parties.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1143.0",
+    "@aws-sdk/s3-request-presigner": "^3.1143.0",
     "@neondatabase/serverless": "^1.1.0",
     "exceljs": "^4.4.0",
     "lossless-json": "^4.3.1",
