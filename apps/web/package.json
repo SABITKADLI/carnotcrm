@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "tsx scripts/deploy-migrations.ts",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
