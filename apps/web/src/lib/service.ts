@@ -32,6 +32,7 @@ import type {
   State,
   User,
 } from "./types";
+import { PRODUCTION_SIZES } from "./types";
 
 export type Input = Record<string, unknown>;
 const str = (v: unknown, max = 500) =>
@@ -89,71 +90,202 @@ function customer(id: unknown) {
   if (contact.type !== "customer") throw new Error("Select a customer");
   return contact;
 }
-export function state(user: User): State {
+export function state(user: User, includeOperations = true): State {
   return withStore(() => {
-  const config = settings();
-  const jobs = all("jobs").filter(
-    (j) => user.role === "admin" || j.tailorId === user.id,
-  );
-  const orders = all("orders").filter(
-    (o) => user.role === "admin" || jobs.some((j) => j.orderId === o.id),
-  );
-  if (user.role === "tailor") {
+    const config = settings();
+    const organizations = includeOperations ? all("organizations") : [];
+    const people = includeOperations ? all("people") : [];
+    const fabricSpecs = includeOperations ? all("fabricSpecs") : [];
+    const allFabricOrders = includeOperations ? all("fabricOrders") : [];
+    const allFabricReceipts = includeOperations ? all("fabricReceipts") : [];
+    const allTransports = includeOperations ? all("transports") : [];
+    const allChallans = includeOperations ? all("challans") : [];
+    const allWorkOrders = includeOperations ? all("workOrders") : [];
+    const allInwards = includeOperations ? all("inwards") : [];
+    const partnerId = user.partnerId || "";
+    const partnerName =
+      organizations
+        .find((organization) => organization.id === partnerId)
+        ?.name.toLowerCase() || "";
+    const scopedFabricOrders =
+      user.role === "admin"
+        ? allFabricOrders
+        : allFabricOrders.filter(
+            (order) =>
+              (user.role === "supplier" && order.supplierId === partnerId) ||
+              (user.role === "agent" && order.agentId === partnerId) ||
+              (user.role === "distributor" &&
+                !!partnerName &&
+                order.purposeParty.toLowerCase().includes(partnerName)),
+          );
+    const scopedTransports =
+      user.role === "admin"
+        ? allTransports
+        : allTransports.filter(
+            (movement) =>
+              (user.role === "supplier" && movement.supplierId === partnerId) ||
+              (user.role === "transporter" &&
+                movement.transporterId === partnerId) ||
+              (user.role === "delivery" &&
+                movement.pickedByPersonId === partnerId) ||
+              (["jobworker", "tailor"].includes(user.role) &&
+                movement.destinationJobworkerId === partnerId) ||
+              (user.role === "distributor" && movement.partyId === partnerId),
+          );
+    const scopedChallans =
+      user.role === "admin"
+        ? allChallans
+        : allChallans.filter(
+            (challan) =>
+              (["jobworker", "tailor"].includes(user.role) &&
+                challan.jobworkerId === partnerId) ||
+              scopedTransports.some(
+                (movement) => movement.challanId === challan.id,
+              ),
+          );
+    const scopedWorkOrders =
+      user.role === "admin"
+        ? allWorkOrders
+        : allWorkOrders.filter(
+            (workOrder) =>
+              ["jobworker", "tailor"].includes(user.role) &&
+              workOrder.jobworkerId === partnerId,
+          );
+    const scopedInwards =
+      user.role === "admin"
+        ? allInwards
+        : allInwards.filter((inward) =>
+            scopedWorkOrders.some(
+              (workOrder) => workOrder.id === inward.workOrderId,
+            ),
+          );
+    const jobs = all("jobs").filter(
+      (j) => user.role === "admin" || j.tailorId === user.id,
+    );
+    const orders = all("orders").filter(
+      (o) => user.role === "admin" || jobs.some((j) => j.orderId === o.id),
+    );
+    if (user.role !== "admin") {
+      return {
+        user,
+        users: [user],
+        jobs,
+        orders: orders.map((o) => ({
+          ...o,
+          customerId: "",
+          unitPrice: 0,
+          laborCost: 0,
+          issuedCost: 0,
+        })),
+        contacts: [],
+        fabrics: [],
+        purchases: [],
+        products: [],
+        invoices: [],
+        payments: [],
+        movements: [],
+        activities: [],
+        organizations: organizations.filter(
+          (organization) => organization.id === partnerId,
+        ),
+        people: people.filter(
+          (person) =>
+            person.id === partnerId || person.organizationId === partnerId,
+        ),
+        fabricSpecs:
+          user.role === "supplier"
+            ? fabricSpecs.filter((spec) => spec.supplierId === partnerId)
+            : [],
+        fabricOrders: scopedFabricOrders.map((order) =>
+          ["supplier", "agent", "distributor"].includes(user.role)
+            ? order
+            : { ...order, pricePerMetre: 0, fabricValue: 0 },
+        ),
+        fabricReceipts: allFabricReceipts.filter((receipt) =>
+          scopedFabricOrders.some(
+            (order) => order.id === receipt.fabricOrderId,
+          ),
+        ),
+        transports: scopedTransports.map((movement) =>
+          ["supplier", "agent", "distributor"].includes(user.role)
+            ? movement
+            : { ...movement, pricePerMetre: 0, value: 0 },
+        ),
+        challans: scopedChallans,
+        workOrders: scopedWorkOrders.map((workOrder) => ({
+          ...workOrder,
+          pricePerMetre: 0,
+          value: 0,
+        })),
+        inwards: scopedInwards,
+        brands: includeOperations ? all("brands") : [],
+        referenceValues: includeOperations ? all("referenceValues") : [],
+        importIssues: [],
+        syncRuns: [],
+        syncConflicts: [],
+        operationalBackups: [],
+        settings: { ...config, address: "", taxId: "", paymentDetails: "" },
+        shopify: {
+          configured: false,
+          domain: "",
+          publication: false,
+          inventory: false,
+        },
+        demo: isDemo(),
+      };
+    }
+    const team = users();
+    if (!team.some((person) => person.id === user.id)) team.unshift(user);
     return {
       user,
-      users: [user],
+      users: team,
+      contacts: all("contacts"),
+      fabrics: all("fabrics"),
+      purchases: all("purchases"),
+      orders,
       jobs,
-      orders: orders.map((o) => ({
-        ...o,
-        customerId: "",
-        unitPrice: 0,
-        laborCost: 0,
-        issuedCost: 0,
-      })),
-      contacts: [],
-      fabrics: [],
-      purchases: [],
-      products: [],
-      invoices: [],
-      payments: [],
-      movements: [],
-      activities: [],
-      settings: { ...config, address: "", taxId: "", paymentDetails: "" },
+      products: all("products"),
+      invoices: all("invoices"),
+      payments: all("payments"),
+      movements: all("movements"),
+      activities: all("activities").slice(0, 200),
+      organizations,
+      people,
+      fabricSpecs,
+      fabricOrders: allFabricOrders,
+      fabricReceipts: allFabricReceipts,
+      transports: allTransports,
+      challans: allChallans,
+      workOrders: allWorkOrders,
+      inwards: allInwards,
+      brands: includeOperations ? all("brands") : [],
+      referenceValues: includeOperations ? all("referenceValues") : [],
+      importIssues: includeOperations ? all("importIssues") : [],
+      syncRuns: includeOperations
+        ? all("syncRuns").map((run) => ({ ...run, payload: undefined }))
+        : [],
+      syncConflicts: includeOperations ? all("syncConflicts") : [],
+      operationalBackups: includeOperations
+        ? all("operationalBackups").map((backup) => ({
+            id: backup.id,
+            createdAt: backup.createdAt,
+            updatedAt: backup.updatedAt,
+            label: backup.label,
+            createdBy: backup.createdBy,
+            counts: backup.counts,
+          }))
+        : [],
+      settings: config,
       shopify: {
-        configured: false,
-        domain: "",
-        publication: false,
-        inventory: false,
+        configured: !!(
+          process.env.SHOPIFY_SHOP && process.env.SHOPIFY_ADMIN_ACCESS_TOKEN
+        ),
+        domain: process.env.SHOPIFY_SHOP || "",
+        publication: !!process.env.SHOPIFY_PUBLICATION_ID,
+        inventory: !!process.env.SHOPIFY_LOCATION_ID,
       },
       demo: isDemo(),
     };
-  }
-  const team = users();
-  if (!team.some((person) => person.id === user.id)) team.unshift(user);
-  return {
-    user,
-    users: team,
-    contacts: all("contacts"),
-    fabrics: all("fabrics"),
-    purchases: all("purchases"),
-    orders,
-    jobs,
-    products: all("products"),
-    invoices: all("invoices"),
-    payments: all("payments"),
-    movements: all("movements"),
-    activities: all("activities").slice(0, 200),
-    settings: config,
-    shopify: {
-      configured: !!(
-        process.env.SHOPIFY_SHOP && process.env.SHOPIFY_ADMIN_ACCESS_TOKEN
-      ),
-      domain: process.env.SHOPIFY_SHOP || "",
-      publication: !!process.env.SHOPIFY_PUBLICATION_ID,
-      inventory: !!process.env.SHOPIFY_LOCATION_ID,
-    },
-    demo: isDemo(),
-  };
   }) as State;
 }
 
@@ -231,8 +363,666 @@ function perform(user: User, action: string, input: Input): unknown {
     audit(user, "Changed password", user.name);
     return { success: true };
   }
+  if (action === "challanStatus") {
+    const challan = get("challans", str(input.id));
+    const allowed =
+      user.role === "admin" ||
+      (["jobworker", "tailor"].includes(user.role) &&
+        challan.jobworkerId === user.partnerId) ||
+      all("transports").some(
+        (movement) =>
+          movement.challanId === challan.id &&
+          ((user.role === "transporter" &&
+            movement.transporterId === user.partnerId) ||
+            (user.role === "delivery" &&
+              movement.pickedByPersonId === user.partnerId)),
+      );
+    if (!allowed)
+      throw new Error("You do not have access to this delivery challan");
+    const status = z
+      .enum([
+        "Issued",
+        "Picked Up",
+        "Delivered",
+        "Acknowledged",
+        "Void",
+        "Returned",
+      ])
+      .parse(input.status);
+    if (["Void", "Returned"].includes(status) && user.role !== "admin")
+      throw new Error("Administrator access required");
+    const updated = put("challans", {
+      ...challan,
+      status,
+      acknowledgedAt:
+        status === "Acknowledged"
+          ? new Date().toISOString()
+          : challan.acknowledgedAt,
+      version: challan.version + 1,
+    });
+    audit(
+      user,
+      `Marked challan ${status.toLowerCase()}`,
+      challan.number,
+      optional(input.notes),
+    );
+    return updated;
+  }
+  if (action === "supplierUpdate") {
+    const order = get("fabricOrders", str(input.id));
+    if (
+      user.role !== "admin" &&
+      !(user.role === "supplier" && order.supplierId === user.partnerId)
+    )
+      throw new Error("You can only update your own purchase orders");
+    const updated = put("fabricOrders", {
+      ...order,
+      supplierAcknowledgedAt: input.acknowledged
+        ? new Date().toISOString()
+        : order.supplierAcknowledgedAt,
+      supplierDeliveryEstimate:
+        optional(input.deliveryEstimate, 10) || order.supplierDeliveryEstimate,
+      supplierNotes: optional(input.notes, 3000),
+      dispatchDetails: optional(input.dispatchDetails, 3000),
+      version: order.version + 1,
+    });
+    audit(
+      user,
+      "Updated supplier commitment",
+      order.poNumber,
+      updated.supplierNotes || "Acknowledged",
+    );
+    return updated;
+  }
+  if (action === "recordNote") {
+    const kind = z
+      .enum(["fabricOrders", "transports", "workOrders"])
+      .parse(input.kind);
+    const id = str(input.id);
+    const note = str(input.note, 3000);
+    const entry = {
+      userId: user.id,
+      author: user.name,
+      role: user.role,
+      note,
+      date: new Date().toISOString(),
+    };
+    if (kind === "fabricOrders") {
+      const record = get("fabricOrders", id);
+      const distributorName =
+        user.role === "distributor" && user.partnerId
+          ? get("organizations", user.partnerId).name.toLowerCase()
+          : "";
+      const allowed =
+        user.role === "admin" ||
+        (user.role === "agent" && record.agentId === user.partnerId) ||
+        (user.role === "supplier" && record.supplierId === user.partnerId) ||
+        (user.role === "distributor" &&
+          !!distributorName &&
+          record.purposeParty.toLowerCase().includes(distributorName));
+      if (!allowed) throw new Error("You cannot add a note to this record");
+      const updated = put("fabricOrders", {
+        ...record,
+        notesLog: [...(record.notesLog || []), entry],
+        version: record.version + 1,
+      });
+      audit(user, "Added partner note", record.poNumber, note);
+      return updated;
+    }
+    if (kind === "transports") {
+      const record = get("transports", id);
+      const allowed =
+        user.role === "admin" ||
+        (user.role === "distributor" && record.partyId === user.partnerId) ||
+        (user.role === "transporter" &&
+          record.transporterId === user.partnerId) ||
+        (["jobworker", "tailor"].includes(user.role) &&
+          record.destinationJobworkerId === user.partnerId);
+      if (!allowed) throw new Error("You cannot add a note to this record");
+      const updated = put("transports", {
+        ...record,
+        notesLog: [...(record.notesLog || []), entry],
+        version: record.version + 1,
+      });
+      audit(user, "Added partner note", record.outwardDcNumber, note);
+      return updated;
+    }
+    const record = get("workOrders", id);
+    if (
+      user.role !== "admin" &&
+      !(
+        ["jobworker", "tailor"].includes(user.role) &&
+        record.jobworkerId === user.partnerId
+      )
+    )
+      throw new Error("You cannot add a note to this record");
+    const updated = put("workOrders", {
+      ...record,
+      notesLog: [...(record.notesLog || []), entry],
+      version: record.version + 1,
+    });
+    audit(user, "Added partner note", record.woNumber, note);
+    return updated;
+  }
+  if (action === "productionUpdate") {
+    const workOrder = get("workOrders", str(input.id));
+    if (
+      user.role !== "admin" &&
+      !(
+        ["jobworker", "tailor"].includes(user.role) &&
+        workOrder.jobworkerId === user.partnerId
+      )
+    )
+      throw new Error("You can only update your own work orders");
+    const cuttingInput = (
+      input.cutting && typeof input.cutting === "object" ? input.cutting : {}
+    ) as Record<string, unknown>;
+    const ratioInput = (
+      input.ratio && typeof input.ratio === "object" ? input.ratio : {}
+    ) as Record<string, unknown>;
+    const cutting = { ...workOrder.cutting };
+    const ratio = { ...workOrder.ratio };
+    for (const size of PRODUCTION_SIZES) {
+      if (cuttingInput[size] !== undefined)
+        cutting[size] = integer(cuttingInput[size], 0, 1_000_000);
+      if (ratioInput[size] !== undefined)
+        ratio[size] = num(ratioInput[size], 0, 1_000_000);
+    }
+    const totalCutQuantity = Object.values(cutting).reduce(
+      (sum, value) => sum + (value || 0),
+      0,
+    );
+    const status = str(input.status, 100);
+    const approvedConsumption =
+      input.approvedConsumption === undefined ||
+      input.approvedConsumption === ""
+        ? workOrder.approvedConsumption
+        : num(input.approvedConsumption, 0.001, 100);
+    if (
+      [
+        "Cutting",
+        "Cutting Completed",
+        "Stitching",
+        "Finishing",
+        "Ready",
+        "Cleared",
+      ].includes(status) &&
+      !approvedConsumption
+    )
+      throw new Error("Approved consumption is required before cutting starts");
+    if (
+      [
+        "Cutting",
+        "Cutting Completed",
+        "Stitching",
+        "Finishing",
+        "Ready",
+        "Cleared",
+      ].includes(status) &&
+      !Object.values(ratio).some((value) => (value || 0) > 0)
+    )
+      throw new Error("Enter at least one size ratio before cutting starts");
+    const cuttingDate =
+      optional(input.cuttingDate, 10) || workOrder.cuttingDate;
+    if (
+      [
+        "Cutting Completed",
+        "Stitching",
+        "Finishing",
+        "Ready",
+        "Cleared",
+      ].includes(status) &&
+      !cuttingDate
+    )
+      throw new Error("Cutting date is required at Cutting Completed or later");
+    const updated = put("workOrders", {
+      ...workOrder,
+      cutting,
+      ratio,
+      totalCutQuantity,
+      status,
+      approvedConsumption,
+      cuttingDate,
+      fiDone:
+        input.fiDone === undefined
+          ? workOrder.fiDone
+          : z.coerce.boolean().parse(input.fiDone),
+      productionRemarks: optional(input.productionRemarks, 3000),
+      actualGoodsReadyDate:
+        optional(input.actualGoodsReadyDate, 10) ||
+        workOrder.actualGoodsReadyDate,
+      expectedQuantity: approvedConsumption
+        ? workOrder.bodyFabric / approvedConsumption
+        : 0,
+      lastUpdateDate: new Date().toISOString().slice(0, 10),
+      version: workOrder.version + 1,
+    });
+    audit(user, "Updated work order", workOrder.woNumber, status);
+    return updated;
+  }
+  if (action === "productionInward") {
+    const workOrder = get("workOrders", str(input.workOrderId));
+    if (
+      user.role !== "admin" &&
+      !(
+        ["jobworker", "tailor"].includes(user.role) &&
+        workOrder.jobworkerId === user.partnerId
+      )
+    )
+      throw new Error("You can only record inward for your own work orders");
+    const setwiseQuantity = integer(input.setwiseQuantity ?? 0, 0),
+      mixPiecesQuantity = integer(input.mixPiecesQuantity ?? 0, 0),
+      damagePiecesQuantity = integer(input.damagePiecesQuantity ?? 0, 0);
+    const totalInward =
+      setwiseQuantity + mixPiecesQuantity + damagePiecesQuantity;
+    if (!totalInward) throw new Error("Enter at least one inward quantity");
+    const inward = put("inwards", {
+      ...base("inward"),
+      version: 1,
+      workOrderId: workOrder.id,
+      inwardDate: date(input.inwardDate),
+      setwiseQuantity,
+      mixPiecesQuantity,
+      damagePiecesQuantity,
+      totalInward,
+      remarks: optional(input.remarks),
+    });
+    const totalReceived = all("inwards")
+      .filter((item) => item.workOrderId === workOrder.id)
+      .reduce((sum, item) => sum + item.totalInward, 0);
+    put("workOrders", {
+      ...workOrder,
+      archived: totalReceived > 0,
+      status: "Cleared",
+      actualGoodsReadyDate: workOrder.actualGoodsReadyDate || inward.inwardDate,
+      lastUpdateDate: inward.inwardDate,
+      version: workOrder.version + 1,
+    });
+    const accepted = setwiseQuantity + mixPiecesQuantity;
+    if (accepted) {
+      const existingProduct = all("products").find(
+        (product) => product.orderId === workOrder.id,
+      );
+      const sizes = Object.entries(workOrder.cutting)
+        .filter(([, quantity]) => (quantity || 0) > 0)
+        .map(([size, quantity]) => `${size}:${quantity}`)
+        .join(", ");
+      const product = put(
+        "products",
+        existingProduct
+          ? {
+              ...existingProduct,
+              stock: existingProduct.stock + accepted,
+            }
+          : {
+              ...base("prd"),
+              name: workOrder.itemName,
+              sku: `WO-${workOrder.woNumber}`,
+              orderId: workOrder.id,
+              category: workOrder.brandName,
+              sizes,
+              stock: accepted,
+              price: 0,
+              cost: accepted
+                ? Math.round((workOrder.value * 100) / accepted)
+                : 0,
+              channelStock: 0,
+            },
+      );
+      put("movements", {
+        ...base("mov"),
+        productId: product.id,
+        quantity: accepted,
+        type: "Garment inward",
+        reference: workOrder.woNumber,
+        actor: user.name,
+        note: `${damagePiecesQuantity} damaged`,
+        fromLocation: workOrder.jobworkerName,
+        toLocation: "Finished goods",
+      });
+    }
+    audit(
+      user,
+      "Recorded garment inward",
+      workOrder.woNumber,
+      `${totalInward} pieces`,
+    );
+    return inward;
+  }
   requireAdmin(user);
   switch (action) {
+    case "organization": {
+      const existing = input.id
+        ? get("organizations", str(input.id))
+        : { ...base("org"), version: 1 };
+      const roles = z
+        .array(
+          z.enum([
+            "supplier",
+            "agent",
+            "jobworker",
+            "transporter",
+            "distributor",
+            "customer",
+            "legal_entity",
+          ]),
+        )
+        .min(1)
+        .parse(input.roles);
+      const record = put("organizations", {
+        ...existing,
+        name: str(input.name, 160),
+        roles,
+        email: optional(input.email, 254),
+        phone: optional(input.phone, 50),
+        address: optional(input.address),
+        taxId: optional(input.taxId, 100),
+        notes: optional(input.notes),
+        version: existing.version + (input.id ? 1 : 0),
+      });
+      audit(user, "Saved partner", record.name, roles.join(", "));
+      return record;
+    }
+    case "fabricOrder": {
+      const spec = get("fabricSpecs", str(input.fabricSpecId));
+      const supplier = get("organizations", spec.supplierId);
+      const poNumbers = all("fabricOrders").map((order) =>
+        Number(order.poNumber.match(/(\d+)$/)?.[1] || 0),
+      );
+      const poNumber =
+        optional(input.poNumber, 50) ||
+        `PO2627/${String(Math.max(0, ...poNumbers) + 1).padStart(3, "0")}`;
+      const quantityOrdered = num(input.quantityOrdered, 0.001),
+        pricePerMetre = num(input.pricePerMetre, 0.01);
+      const agentName = spec.agentId
+        ? get("organizations", spec.agentId).name
+        : "";
+      const order = put("fabricOrders", {
+        ...base("fpo"),
+        version: 1,
+        orderBy: user.name,
+        orderDate: date(input.orderDate),
+        poNumber,
+        internalItemName:
+          optional(input.internalItemName, 150) || spec.rangeName,
+        fabricSpecId: spec.id,
+        fabricName: spec.name,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        width: spec.width,
+        folding: spec.folding,
+        weave: spec.weave,
+        content: spec.content,
+        construction: spec.construction,
+        threadCount: spec.threadCount,
+        agentId: spec.agentId,
+        agentName,
+        fabricType: str(input.fabricType, 100),
+        pricePerMetre,
+        deliveryDate: date(input.deliveryDate),
+        designs: str(input.designs, 100),
+        colors: str(input.colors, 100),
+        quantityOrdered,
+        purposeParty: str(input.purposeParty, 160),
+        fabricFor: str(input.fabricFor, 100),
+        receivedMetres: 0,
+        cancelledMetres: 0,
+        status: "Ordered",
+        remarks: optional(input.remarks),
+        fabricValue: quantityOrdered * pricePerMetre,
+      });
+      audit(user, "Created fabric purchase order", poNumber, spec.name);
+      return order;
+    }
+    case "transport": {
+      const fabricOrderId = optional(input.fabricOrderId, 100) || undefined;
+      const order = fabricOrderId
+        ? get("fabricOrders", fabricOrderId)
+        : undefined;
+      const supplier = get(
+        "organizations",
+        str(input.supplierId || order?.supplierId),
+      );
+      const party = get("organizations", str(input.partyId));
+      const jobworker = get("organizations", str(input.jobworkerId));
+      const transporter = get("organizations", str(input.transporterId));
+      const quantity = num(input.fabricQuantity, 0.001),
+        price = order?.pricePerMetre || num(input.pricePerMetre ?? 0, 0);
+      const existingNumbers = all("challans").map((challan) =>
+        Number(challan.number.match(/SF(\d+)/i)?.[1] || 0),
+      );
+      const dcNumber =
+        optional(input.outwardDcNumber, 50) ||
+        `SF${Math.max(1386, ...existingNumbers) + 1}`;
+      const issueDate = date(input.dcIssueDate),
+        transportName = transporter.name,
+        pickedBy = str(input.pickedBy, 120);
+      const movement = put("transports", {
+        ...base("tm"),
+        version: 1,
+        fabricOrderId: order?.id,
+        poNumber: order?.poNumber || "",
+        fabricName: order?.fabricName || str(input.fabricName, 160),
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        partyId: party.id,
+        partyName: party.name,
+        lrDate: optional(input.lrDate, 10),
+        lrNumber: optional(input.lrNumber, 100),
+        numberOfBales: integer(input.numberOfBales, 1),
+        transporterId: transporter.id,
+        transportName,
+        fabricQuantity: quantity,
+        destinationJobworkerId: jobworker.id,
+        destinationJobworkerName: jobworker.name,
+        pickedBy,
+        outwardDcNumber: dcNumber,
+        dcIssueDate: issueDate,
+        balePickupDate: optional(input.balePickupDate, 10),
+        balePickupInward: "",
+        stage: "Issued",
+        priority: optional(input.priority, 40),
+        remarks: optional(input.remarks),
+        pricePerMetre: price,
+        priceOverride: !order,
+        value: quantity * price,
+      });
+      const config = settings();
+      const challan = put("challans", {
+        ...base("dc"),
+        version: 1,
+        number: dcNumber,
+        issueDate,
+        status: "Issued",
+        issuer: {
+          name: config.logisticsName || "Singal Fabrics",
+          address: config.logisticsAddress || "",
+          taxId: config.logisticsTaxId || "",
+          email: config.logisticsEmail || "",
+          phone: config.logisticsPhone || "",
+        },
+        consignee: {
+          name: jobworker.name,
+          address: jobworker.address,
+          taxId: jobworker.taxId,
+          email: jobworker.email,
+          phone: jobworker.phone,
+        },
+        jobworkerId: jobworker.id,
+        driverName: pickedBy,
+        driverPhone: optional(input.driverPhone, 50),
+        transportName,
+        lrNumber: optional(input.lrNumber, 100),
+        purpose:
+          "Goods sent for job work; not for sale. Issued under GST Rule 55.",
+        terms:
+          "Material remains the property of Singal Fabrics. Quantity and condition must be verified on receipt.",
+        remarks: optional(input.remarks),
+        lines: [
+          {
+            id: `${movement.id}:1`,
+            transportMovementId: movement.id,
+            fabricOrderId: order?.id,
+            fabricName: movement.fabricName,
+            quantityMetres: quantity,
+            transportName,
+            lrNumber: movement.lrNumber,
+            bundles: movement.numberOfBales,
+            pricePerMetre: price,
+          },
+        ],
+        issuedAt: new Date().toISOString(),
+      });
+      put("transports", { ...movement, challanId: challan.id });
+      put("movements", {
+        ...base("mov"),
+        quantity: -Math.round(quantity * 1000),
+        type: "Jobworker issue",
+        reference: dcNumber,
+        actor: user.name,
+        note: movement.fabricName,
+        fromLocation: "Singal Fabrics",
+        toLocation: jobworker.name,
+      });
+      audit(
+        user,
+        "Issued delivery challan",
+        dcNumber,
+        `${quantity} m to ${jobworker.name}`,
+      );
+      return challan;
+    }
+    case "workOrder": {
+      const challan = get("challans", str(input.challanId));
+      if (!challan.jobworkerId)
+        throw new Error("The challan is not linked to a jobworker");
+      const jobworker = get("organizations", challan.jobworkerId);
+      const brand = get("brands", str(input.brandId));
+      const bodyFabric = num(input.bodyFabric, 0.001),
+        trimFabric = num(input.trimFabric ?? 0, 0);
+      const sequenceNumber =
+        Math.max(
+          0,
+          ...all("workOrders").map((order) =>
+            Number(order.woNumber.match(/(\d+)$/)?.[1] || 0),
+          ),
+        ) + 1;
+      const issuedDate = date(input.issuedDate),
+        firstLine = challan.lines[0];
+      const record = put("workOrders", {
+        ...base("wo"),
+        version: 1,
+        challanId: challan.id,
+        dcNumber: challan.number,
+        jobworkerId: jobworker.id,
+        jobworkerName: jobworker.name,
+        fabricOutwardDate: challan.issueDate,
+        woNumber: optional(input.woNumber, 50) || String(sequenceNumber),
+        brandId: brand.id,
+        brandName: brand.name,
+        itemName: str(input.itemName, 200),
+        bodyFabric,
+        trimFabric,
+        issuedDate,
+        ageingDays: Math.max(
+          0,
+          Math.round((Date.now() - Date.parse(issuedDate)) / 86_400_000),
+        ),
+        remarks: optional(input.remarks),
+        ratio: {},
+        approvedConsumption: input.approvedConsumption
+          ? num(input.approvedConsumption, 0.001, 100)
+          : undefined,
+        cuttingDate: "",
+        expectedQuantity: input.approvedConsumption
+          ? bodyFabric / num(input.approvedConsumption, 0.001, 100)
+          : 0,
+        status: "Pending",
+        lastUpdateDate: issuedDate,
+        fiDone: false,
+        productionRemarks: "",
+        actualGoodsReadyDate: "",
+        cutting: {},
+        totalCutQuantity: 0,
+        fabricName: firstLine?.fabricName || "",
+        fabricSupplier: "",
+        pricePerMetre: firstLine?.pricePerMetre || 0,
+        value: bodyFabric * (firstLine?.pricePerMetre || 0),
+        archived: false,
+      });
+      audit(
+        user,
+        "Created production work order",
+        record.woNumber,
+        `${record.itemName} · ${jobworker.name}`,
+      );
+      return record;
+    }
+    case "fabricReceipt": {
+      const order = get("fabricOrders", str(input.fabricOrderId));
+      const quantityMetres = num(
+        input.quantityMetres,
+        0.001,
+        order.quantityOrdered - order.receivedMetres,
+      );
+      const receipt = put("fabricReceipts", {
+        ...base("receipt"),
+        version: 1,
+        fabricOrderId: order.id,
+        receiptDate: date(input.receiptDate),
+        quantityMetres,
+        warehouse: str(input.warehouse, 120),
+        lotNumber: optional(input.lotNumber, 120),
+        remarks: optional(input.remarks),
+      });
+      const receivedMetres = order.receivedMetres + quantityMetres;
+      put("fabricOrders", {
+        ...order,
+        receivedMetres,
+        status:
+          receivedMetres >= order.quantityOrdered ? "Received" : "Partial",
+        version: order.version + 1,
+      });
+      put("movements", {
+        ...base("mov"),
+        quantity: Math.round(quantityMetres * 1000),
+        type: "Fabric receipt",
+        reference: order.poNumber,
+        actor: user.name,
+        note: receipt.remarks,
+        fromLocation: order.supplierName,
+        toLocation: receipt.warehouse,
+      });
+      audit(user, "Received fabric", order.poNumber, `${quantityMetres} m`);
+      return receipt;
+    }
+    case "importIssue": {
+      const issue = get("importIssues", str(input.id));
+      const updated = put("importIssues", {
+        ...issue,
+        resolved: z.coerce.boolean().parse(input.resolved),
+      });
+      audit(
+        user,
+        updated.resolved ? "Resolved import issue" : "Reopened import issue",
+        `${issue.sheet} row ${issue.rowNumber}`,
+      );
+      return updated;
+    }
+    case "syncConflict": {
+      const conflict = get("syncConflicts", str(input.id));
+      const resolution = z
+        .enum(["portal", "workbook", "archive"])
+        .parse(input.resolution);
+      const updated = put("syncConflicts", { ...conflict, resolution });
+      audit(
+        user,
+        "Resolved workbook conflict",
+        `${conflict.sheet} row ${conflict.rowNumber}`,
+        resolution,
+      );
+      return updated;
+    }
     case "contact": {
       const type = z.enum(["customer", "supplier"]).parse(input.type);
       const existing = input.id ? get("contacts", str(input.id)) : base("ct");
@@ -442,7 +1232,10 @@ function perform(user: User, action: string, input: Input): unknown {
       if (!["planned", "production"].includes(order.status) || !order.plan)
         throw new Error("Approve a cutting plan before assigning production");
       const tailor = users().find(
-        (u) => u.id === input.tailorId && u.role === "tailor" && u.active,
+        (u) =>
+          u.id === input.tailorId &&
+          ["tailor", "jobworker"].includes(u.role) &&
+          u.active,
       );
       if (!tailor) throw new Error("Select an active tailor");
       const quantity = integer(input.quantity, 1, order.quantity);
@@ -693,17 +1486,50 @@ function perform(user: User, action: string, input: Input): unknown {
           .regex(/^[A-Z0-9-]{1,10}$/)
           .parse(input.invoicePrefix),
         paymentDetails: optional(input.paymentDetails),
+        portalName: optional(input.portalName, 120) || "Carnot CRM",
+        brandName: optional(input.brandName, 120) || "Carnot",
+        logisticsName: optional(input.logisticsName, 120) || "Singal Fabrics",
+        logisticsEmail: optional(input.logisticsEmail, 254),
+        logisticsPhone: optional(input.logisticsPhone, 50),
+        logisticsAddress: optional(input.logisticsAddress),
+        logisticsTaxId: optional(input.logisticsTaxId, 100),
       };
       saveSettings(config);
       audit(user, "Updated company settings", config.companyName);
       return config;
     }
     case "user": {
+      const role = z
+        .enum([
+          "admin",
+          "supplier",
+          "agent",
+          "transporter",
+          "delivery",
+          "jobworker",
+          "distributor",
+          "tailor",
+        ])
+        .parse(input.role);
+      const partnerId = optional(input.partnerId, 100) || undefined;
+      if (!["admin", "tailor"].includes(role) && !partnerId)
+        throw new Error(
+          "Link partner accounts to an imported organization or person",
+        );
+      if (
+        partnerId &&
+        !all("organizations").some(
+          (organization) => organization.id === partnerId,
+        ) &&
+        !all("people").some((person) => person.id === partnerId)
+      )
+        throw new Error("Linked partner record was not found");
       const person = createUser(
         str(input.name, 100),
         z.email().parse(input.email),
         str(input.password, 128),
-        z.enum(["admin", "tailor"]).parse(input.role),
+        role,
+        partnerId,
       );
       audit(user, "Created account", person.name, person.role);
       return person;

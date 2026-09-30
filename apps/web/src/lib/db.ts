@@ -25,6 +25,7 @@ type Store = {
   operations: OperationRecord[];
   settings?: Settings;
   dirtyEntities: Set<string>;
+  deletedEntities: Set<string>;
   dirtyUsers: Set<string>;
   dirtySessions: Set<string>;
   deletedSessions: Set<string>;
@@ -45,6 +46,21 @@ const kinds: Kind[] = [
   "payments",
   "movements",
   "activities",
+  "organizations",
+  "people",
+  "fabricSpecs",
+  "fabricOrders",
+  "fabricReceipts",
+  "transports",
+  "challans",
+  "workOrders",
+  "inwards",
+  "brands",
+  "referenceValues",
+  "importIssues",
+  "syncRuns",
+  "syncConflicts",
+  "operationalBackups",
 ];
 
 const defaults: Settings = {
@@ -57,6 +73,14 @@ const defaults: Settings = {
   taxRate: 0,
   invoicePrefix: "INV",
   paymentDetails: "",
+  portalName: "Carnot CRM",
+  brandName: "Carnot",
+  logisticsName: "Singal Fabrics",
+  logisticsEmail: "contact@singalfabrics.com",
+  logisticsPhone: "+91 96862 95345",
+  logisticsAddress:
+    "76, Ground Floor, Singal Square, 3rd Cross Rd, Lal Bagh Road, Bengaluru, Karnataka – 560027",
+  logisticsTaxId: "29AGDPS5158E1Z5",
 };
 
 const storage = new AsyncLocalStorage<Store>();
@@ -120,6 +144,12 @@ async function ensurePostgres() {
           reset bigint NOT NULL
         );
       `);
+      await pool().query(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS access_role text",
+      );
+      await pool().query(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_id text",
+      );
     })();
   }
   await globalState.carnotReady;
@@ -146,6 +176,13 @@ export function db() {
       CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, actor TEXT NOT NULL, payload TEXT NOT NULL, result TEXT NOT NULL, created INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS login_attempts (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset INTEGER NOT NULL);
       PRAGMA user_version=1;`);
+    const columns = connection.prepare("PRAGMA table_info(users)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((column) => column.name === "access_role"))
+      connection.exec("ALTER TABLE users ADD COLUMN access_role TEXT");
+    if (!columns.some((column) => column.name === "partner_id"))
+      connection.exec("ALTER TABLE users ADD COLUMN partner_id TEXT");
     globalState.carnotDb = connection;
   }
   return globalState.carnotDb;
@@ -169,17 +206,23 @@ function activeStore() {
 
 async function loadStore(client: PoolClient): Promise<Store> {
   await ensurePostgres();
-  const [entities, usersRows, sessionsRows, settingsRows, operationRows, attemptsRows] =
-    await Promise.all([
-      client.query("SELECT kind,id,data FROM entities"),
-      client.query(
-        "SELECT id,name,email,role,password,active FROM users ORDER BY name",
-      ),
-      client.query("SELECT token,user_id,expires FROM sessions"),
-      client.query("SELECT data FROM settings WHERE id=1"),
-      client.query("SELECT id,actor,payload,result,created FROM operations"),
-      client.query("SELECT key,attempts,reset FROM login_attempts"),
-    ]);
+  const [
+    entities,
+    usersRows,
+    sessionsRows,
+    settingsRows,
+    operationRows,
+    attemptsRows,
+  ] = await Promise.all([
+    client.query("SELECT kind,id,data FROM entities"),
+    client.query(
+      "SELECT id,name,email,CASE WHEN COALESCE(access_role,role)='tailor' THEN 'jobworker' ELSE COALESCE(access_role,role) END AS role,partner_id,password,active FROM users ORDER BY name",
+    ),
+    client.query("SELECT token,user_id,expires FROM sessions"),
+    client.query("SELECT data FROM settings WHERE id=1"),
+    client.query("SELECT id,actor,payload,result,created FROM operations"),
+    client.query("SELECT key,attempts,reset FROM login_attempts"),
+  ]);
   const entitiesByKind = new Map<Kind, Map<string, Entities[Kind]>>();
   for (const kind of kinds) entitiesByKind.set(kind, new Map());
   for (const row of entities.rows as {
@@ -197,6 +240,7 @@ async function loadStore(client: PoolClient): Promise<Store> {
       name: String(row.name),
       email: String(row.email),
       role: row.role as Role,
+      partnerId: row.partner_id ? String(row.partner_id) : undefined,
       password: String(row.password),
       active: row.active === true || row.active === 1,
     })),
@@ -210,17 +254,20 @@ async function loadStore(client: PoolClient): Promise<Store> {
       attempts: Number(row.attempts),
       reset: Number(row.reset),
     })),
-    operations: (operationRows.rows as Record<string, unknown>[]).map((row) => ({
-      id: String(row.id),
-      actor: String(row.actor),
-      payload: String(row.payload),
-      result: String(row.result),
-      created: Number(row.created),
-    })),
+    operations: (operationRows.rows as Record<string, unknown>[]).map(
+      (row) => ({
+        id: String(row.id),
+        actor: String(row.actor),
+        payload: String(row.payload),
+        result: String(row.result),
+        created: Number(row.created),
+      }),
+    ),
     settings: settingsRows.rows[0]?.data
       ? parseJson<Settings>(settingsRows.rows[0].data)
       : undefined,
     dirtyEntities: new Set(),
+    deletedEntities: new Set(),
     dirtyUsers: new Set(),
     dirtySessions: new Set(),
     deletedSessions: new Set(),
@@ -232,6 +279,13 @@ async function loadStore(client: PoolClient): Promise<Store> {
 }
 
 async function commitStore(client: PoolClient, store: Store) {
+  for (const key of store.deletedEntities) {
+    const [kind, id] = key.split(":", 2);
+    await client.query("DELETE FROM entities WHERE kind=$1 AND id=$2", [
+      kind,
+      id,
+    ]);
+  }
   for (const key of store.dirtyEntities) {
     const [kind, id] = key.split(":", 2) as [Kind, string];
     await client.query(
@@ -243,17 +297,28 @@ async function commitStore(client: PoolClient, store: Store) {
     const user = store.users.find((candidate) => candidate.id === userId);
     if (!user) continue;
     await client.query(
-      `INSERT INTO users(id,name,email,role,password,active)
-       VALUES($1,$2,$3,$4,$5,$6)
+      `INSERT INTO users(id,name,email,role,password,active,access_role,partner_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT(id) DO UPDATE SET
-       name=excluded.name,email=excluded.email,role=excluded.role,password=excluded.password,active=excluded.active`,
-      [user.id, user.name, user.email, user.role, user.password, user.active],
+       name=excluded.name,email=excluded.email,role=excluded.role,password=excluded.password,active=excluded.active,access_role=excluded.access_role,partner_id=excluded.partner_id`,
+      [
+        user.id,
+        user.name,
+        user.email,
+        user.role === "admin" ? "admin" : "tailor",
+        user.password,
+        user.active,
+        user.role,
+        user.partnerId || null,
+      ],
     );
   }
   for (const token of store.deletedSessions)
     await client.query("DELETE FROM sessions WHERE token=$1", [token]);
   for (const token of store.dirtySessions) {
-    const session = store.sessions.find((candidate) => candidate.token === token);
+    const session = store.sessions.find(
+      (candidate) => candidate.token === token,
+    );
     if (!session) continue;
     await client.query(
       "INSERT INTO sessions(token,user_id,expires) VALUES($1,$2,$3) ON CONFLICT(token) DO UPDATE SET user_id=excluded.user_id,expires=excluded.expires",
@@ -340,6 +405,7 @@ export function put<K extends Kind>(kind: K, value: Entities[K]): Entities[K] {
   if (store) {
     fromStore(store, kind).set(record.id, record);
     store.dirtyEntities.add(`${kind}:${record.id}`);
+    store.deletedEntities.delete(`${kind}:${record.id}`);
     return record;
   }
   db()
@@ -348,6 +414,21 @@ export function put<K extends Kind>(kind: K, value: Entities[K]): Entities[K] {
     )
     .run(kind, record.id, JSON.stringify(record));
   return record;
+}
+
+export function remove<K extends Kind>(kind: K, id: string) {
+  const store = activeStore();
+  if (store) {
+    fromStore(store, kind).delete(id);
+    store.deletedEntities.add(`${kind}:${id}`);
+    store.dirtyEntities.delete(`${kind}:${id}`);
+    return;
+  }
+  db().prepare("DELETE FROM entities WHERE kind=? AND id=?").run(kind, id);
+}
+
+export function clearKind<K extends Kind>(kind: K) {
+  for (const record of all(kind)) remove(kind, record.id);
 }
 
 export function base(prefix: string): Base {
@@ -362,7 +443,9 @@ export function transaction<T>(fn: () => T): T | Promise<T> {
       try {
         await ensurePostgres();
         await client.query("BEGIN");
-        await client.query("SELECT pg_advisory_xact_lock(hashtext('carnotcrm'))");
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtext('carnotcrm'))",
+        );
         const store = await loadStore(client);
         const result = storage.run(store, fn);
         await commitStore(client, store);
@@ -393,9 +476,9 @@ export function sequence(kind: Kind, prefix: string) {
 
 export function settings(): Settings {
   const store = activeStore();
-  if (store) return store.settings || defaults;
+  if (store) return { ...defaults, ...(store.settings || {}) };
   const row = db().prepare("SELECT data FROM settings WHERE id=1").get();
-  return row ? JSON.parse(row.data as string) : defaults;
+  return row ? { ...defaults, ...JSON.parse(row.data as string) } : defaults;
 }
 
 export function saveSettings(value: Settings) {
@@ -416,15 +499,22 @@ export function storedUsers(): StoredUser[] {
   const store = activeStore();
   if (store) return store.users;
   return db()
-    .prepare("SELECT id,name,email,role,password,active FROM users ORDER BY name")
+    .prepare(
+      "SELECT id,name,email,CASE WHEN COALESCE(access_role,role)='tailor' THEN 'jobworker' ELSE COALESCE(access_role,role) END AS role,partner_id AS partnerId,password,active FROM users ORDER BY name",
+    )
     .all()
-    .map((row) => ({ ...row, active: !!row.active })) as unknown as StoredUser[];
+    .map((row) => ({
+      ...row,
+      active: !!row.active,
+    })) as unknown as StoredUser[];
 }
 
 export function saveUser(user: StoredUser) {
   const store = activeStore();
   if (store) {
-    const index = store.users.findIndex((candidate) => candidate.id === user.id);
+    const index = store.users.findIndex(
+      (candidate) => candidate.id === user.id,
+    );
     if (index >= 0) store.users[index] = user;
     else store.users.push(user);
     store.users.sort((a, b) => a.name.localeCompare(b.name));
@@ -433,12 +523,21 @@ export function saveUser(user: StoredUser) {
   }
   db()
     .prepare(
-      `INSERT INTO users(id,name,email,role,password,active)
-       VALUES(?,?,?,?,?,?)
+      `INSERT INTO users(id,name,email,role,password,active,access_role,partner_id)
+       VALUES(?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET
-       name=excluded.name,email=excluded.email,role=excluded.role,password=excluded.password,active=excluded.active`,
+       name=excluded.name,email=excluded.email,role=excluded.role,password=excluded.password,active=excluded.active,access_role=excluded.access_role,partner_id=excluded.partner_id`,
     )
-    .run(user.id, user.name, user.email, user.role, user.password, user.active ? 1 : 0);
+    .run(
+      user.id,
+      user.name,
+      user.email,
+      user.role === "admin" ? "admin" : "tailor",
+      user.password,
+      user.active ? 1 : 0,
+      user.role,
+      user.partnerId || null,
+    );
 }
 
 export function sessions() {
@@ -468,7 +567,9 @@ export function saveSession(session: SessionRecord) {
 export function deleteSession(token: string) {
   const store = activeStore();
   if (store) {
-    store.sessions = store.sessions.filter((session) => session.token !== token);
+    store.sessions = store.sessions.filter(
+      (session) => session.token !== token,
+    );
     store.deletedSessions.add(token);
     store.dirtySessions.delete(token);
     return;
@@ -477,12 +578,16 @@ export function deleteSession(token: string) {
 }
 
 export function deleteSessionsForUser(userId: string) {
-  for (const session of sessions().filter((candidate) => candidate.userId === userId))
+  for (const session of sessions().filter(
+    (candidate) => candidate.userId === userId,
+  ))
     deleteSession(session.token);
 }
 
 export function deleteExpiredSessions(now = Date.now()) {
-  for (const session of sessions().filter((candidate) => candidate.expires < now))
+  for (const session of sessions().filter(
+    (candidate) => candidate.expires < now,
+  ))
     deleteSession(session.token);
 }
 

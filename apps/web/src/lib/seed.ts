@@ -36,7 +36,8 @@ export async function seedDemo() {
       actor: "Carnot",
       action: "Sample workspace ready",
       subject: "Demo data",
-      detail: "Demo accounts were created. Add fabrics, customers and orders to explore the workflow.",
+      detail:
+        "Demo accounts were created. Add fabrics, customers and orders to explore the workflow.",
     });
   });
 }

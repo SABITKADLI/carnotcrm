@@ -128,7 +128,9 @@ export async function sendToShopify(
     const shop = await graphql<{ shop: { currencyCode: string } }>(
       "query StoreCurrency { shop { currencyCode } }",
     );
-    if (shop.shop.currencyCode !== (await transaction(() => settings())).currency)
+    if (
+      shop.shop.currencyCode !== (await transaction(() => settings())).currency
+    )
       throw new Error(
         "Shopify store currency must match the CRM currency before listing products",
       );
@@ -328,8 +330,7 @@ export function processPaidWebhook(raw: Buffer, headers: Headers) {
     active: true,
   };
   return transaction(() => {
-    if (operation(key))
-      return { duplicate: true };
+    if (operation(key)) return { duplicate: true };
     for (const line of body.line_items) {
       const p = all("products").find(
         (p) =>

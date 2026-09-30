@@ -24,12 +24,16 @@ import {
   Download,
   CircleCheck,
   RefreshCw,
+  Database,
+  FileSpreadsheet,
+  ClipboardCheck,
 } from "lucide-react";
 import { type State } from "@/lib/types";
 import { Editor, type EditRequest } from "./editor";
 import { Views } from "./views";
 import { CuttingRoom, downloadCSV } from "./cutting-room";
 import { Progress } from "./ui";
+import { OperationsViews } from "./operations-views";
 const navigation = [
   {
     id: "overview",
@@ -37,9 +41,15 @@ const navigation = [
     icon: LayoutDashboard,
     group: "WORKSPACE",
   },
+  { id: "master-data", label: "Master data", icon: Database },
+  { id: "fabric-orders", label: "Fabric orders", icon: Spool },
+  { id: "transport-dc", label: "Transport & DC", icon: Truck },
+  { id: "production", label: "Production", icon: Factory },
+  { id: "cleared-lots", label: "Cleared lots", icon: ClipboardCheck },
+  { id: "workbook-sync", label: "Workbook sync", icon: FileSpreadsheet },
   { id: "orders", label: "Garment orders", icon: ShoppingBag },
   { id: "cutting", label: "Cutting room", icon: Scissors },
-  { id: "production", label: "Tailor production", icon: Factory },
+  { id: "garment-production", label: "Garment jobs", icon: Factory },
   {
     id: "fabrics",
     label: "Fabric library",
@@ -62,8 +72,28 @@ const navigation = [
 ];
 const headings: Record<string, [string, string]> = {
   overview: [
-    "A view of the whole studio.",
-    "The orders, materials and people moving your business forward.",
+    "From fabric order to finished stock.",
+    "Quantities, value, movement, production ageing and inward discrepancies across Singal Fabrics.",
+  ],
+  "master-data": [
+    "One trusted directory.",
+    "Fabric specifications and every supplier, agent, jobworker, transporter, party and brand.",
+  ],
+  "fabric-orders": [
+    "Source every metre with clarity.",
+    "Purchase orders, receipts, delivery dates, values and overdue commitments.",
+  ],
+  "transport-dc": [
+    "Move fabric with a complete paper trail.",
+    "Transport lines, LR details, bundle counts, jobworkers and printable delivery challans.",
+  ],
+  "cleared-lots": [
+    "Reconcile every finished lot.",
+    "Expected, cut and inward quantities with damage, mix, shortages and final consumption.",
+  ],
+  "workbook-sync": [
+    "Excel and Carnot, kept in step.",
+    "Preview, validate and commit the company tracker, or download the current portal state.",
   ],
   orders: [
     "Every order, considered.",
@@ -74,8 +104,12 @@ const headings: Record<string, [string, string]> = {
     "Plan components, review utilization and reserve your fabric.",
   ],
   production: [
+    "Every factory job, in view.",
+    "Work orders, cutting quantities, consumption, ageing and partner updates.",
+  ],
+  "garment-production": [
     "Good work, in progress.",
-    "A shared production floor for your studio and tailoring partners.",
+    "Garment assignments for the existing made-to-order workflow.",
   ],
   fabrics: [
     "The material comes first.",
@@ -136,24 +170,49 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
   const [toast, setToast] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [connected, setConnected] = useState(true);
-  const refresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const response = await fetch("/api/state", { cache: "no-store" });
-      if (response.status === 401) {
-        router.replace("/login");
-        router.refresh();
-        return;
+  const refresh = useCallback(
+    async (full = false) => {
+      setRefreshing(true);
+      try {
+        const response = await fetch(`/api/state${full ? "?scope=full" : ""}`, {
+          cache: "no-store",
+        });
+        if (response.status === 401) {
+          router.replace("/login");
+          router.refresh();
+          return;
+        }
+        if (!response.ok) throw new Error("Refresh failed");
+        const next = (await response.json()) as State;
+        if (full) setState(next);
+        else
+          setState((current) => ({
+            ...next,
+            organizations: current.organizations,
+            people: current.people,
+            fabricSpecs: current.fabricSpecs,
+            fabricOrders: current.fabricOrders,
+            fabricReceipts: current.fabricReceipts,
+            transports: current.transports,
+            challans: current.challans,
+            workOrders: current.workOrders,
+            inwards: current.inwards,
+            brands: current.brands,
+            referenceValues: current.referenceValues,
+            importIssues: current.importIssues,
+            syncRuns: current.syncRuns,
+            syncConflicts: current.syncConflicts,
+            operationalBackups: current.operationalBackups,
+          }));
+        setConnected(true);
+      } catch {
+        setConnected(false);
+      } finally {
+        setRefreshing(false);
       }
-      if (!response.ok) throw new Error("Refresh failed");
-      setState(await response.json());
-      setConnected(true);
-    } catch {
-      setConnected(false);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [router]);
+    },
+    [router],
+  );
   useEffect(() => {
     const id = setInterval(() => {
       if (document.visibilityState === "visible") refresh();
@@ -185,7 +244,7 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
     if (!res.ok) throw new Error(result.error || "Unable to save changes");
     pendingOperations.current.delete(key);
     if (result.state) setState(result.state);
-    else await refresh();
+    else await refresh(true);
     if (action === "changePassword") {
       router.replace("/login");
       router.refresh();
@@ -206,13 +265,25 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
     router.replace("/login");
     router.refresh();
   }
-  const tailor = state.user.role === "tailor";
+  const tailor = ["tailor", "jobworker"].includes(state.user.role);
   const nav = navigation.filter(
-    (n) => !tailor || ["production", "settings"].includes(n.id),
+    (n) =>
+      state.user.role === "admin" ||
+      (
+        {
+          supplier: ["fabric-orders", "transport-dc", "settings"],
+          agent: ["fabric-orders", "settings"],
+          transporter: ["transport-dc", "settings"],
+          delivery: ["transport-dc", "settings"],
+          jobworker: ["transport-dc", "production", "cleared-lots", "settings"],
+          tailor: ["transport-dc", "production", "cleared-lots", "settings"],
+          distributor: ["fabric-orders", "transport-dc", "settings"],
+        } as Record<string, string[]>
+      )[state.user.role]?.includes(n.id),
   );
   const total = state.jobs.reduce((s, j) => s + j.quantity, 0),
     finished = state.jobs.reduce((s, j) => s + j.finished, 0);
-  const primary = !tailor ? actions[view] : undefined;
+  const primary = state.user.role === "admin" ? actions[view] : undefined;
   const exportData = () => {
     const data: object[] =
       view === "fabrics"
@@ -231,7 +302,7 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
                         c.type ===
                         (view === "customers" ? "customer" : "supplier"),
                     )
-                  : view === "production"
+                  : view === "garment-production"
                     ? state.jobs
                     : state.orders;
     if (!data.length) {
@@ -356,7 +427,7 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
             <button
               className="icon-button"
               aria-label="Refresh data"
-              onClick={refresh}
+              onClick={() => refresh()}
             >
               <RefreshCw size={16} className={refreshing ? "spin" : ""} />
             </button>
@@ -378,9 +449,18 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
               <p>{headings[view][1]}</p>
             </div>
             <div className="heading-actions">
-              {!["settings", "cutting", "reports", "overview"].includes(
-                view,
-              ) && (
+              {![
+                "settings",
+                "cutting",
+                "reports",
+                "overview",
+                "master-data",
+                "fabric-orders",
+                "transport-dc",
+                "production",
+                "cleared-lots",
+                "workbook-sync",
+              ].includes(view) && (
                 <button className="button secondary" onClick={exportData}>
                   <Download size={16} />
                   Export
@@ -397,7 +477,13 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
               )}
             </div>
           </div>
-          {!["overview", "cutting", "settings", "reports"].includes(view) && (
+          {![
+            "overview",
+            "cutting",
+            "settings",
+            "reports",
+            "workbook-sync",
+          ].includes(view) && (
             <div className="toolbar">
               <div className="search">
                 <Search size={17} />
@@ -417,9 +503,12 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
                   </button>
                 )}
               </div>
-              {["orders", "invoices", "production", "purchases"].includes(
-                view,
-              ) && (
+              {[
+                "orders",
+                "invoices",
+                "garment-production",
+                "purchases",
+              ].includes(view) && (
                 <select
                   aria-label="Filter by status"
                   value={filter}
@@ -458,9 +547,25 @@ export function Workspace({ view, initial }: { view: string; initial: State }) {
           )}
           {view === "cutting" ? (
             <CuttingRoom state={state} mutate={mutate} />
+          ) : [
+              "overview",
+              "master-data",
+              "fabric-orders",
+              "transport-dc",
+              "production",
+              "cleared-lots",
+              "workbook-sync",
+            ].includes(view) ? (
+            <OperationsViews
+              view={view}
+              state={state}
+              query={query}
+              mutate={mutate}
+              refresh={() => refresh(true)}
+            />
           ) : (
             <Views
-              view={view}
+              view={view === "garment-production" ? "production" : view}
               state={state}
               query={query}
               filter={filter}

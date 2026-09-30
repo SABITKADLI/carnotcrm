@@ -1,10 +1,18 @@
-export type Role = "admin" | "tailor";
+export type PartnerRole =
+  | "supplier"
+  | "agent"
+  | "transporter"
+  | "delivery"
+  | "jobworker"
+  | "distributor";
+export type Role = "admin" | PartnerRole | "tailor";
 export interface User {
   id: string;
   name: string;
   email: string;
   role: Role;
   active: boolean;
+  partnerId?: string;
 }
 export interface Base {
   id: string;
@@ -178,6 +186,8 @@ export interface Movement extends Base {
   reference: string;
   actor: string;
   note: string;
+  fromLocation?: string;
+  toLocation?: string;
 }
 export interface Activity extends Base {
   actor: string;
@@ -195,6 +205,294 @@ export interface Settings {
   taxRate: number;
   invoicePrefix: string;
   paymentDetails: string;
+  portalName?: string;
+  brandName?: string;
+  logisticsName?: string;
+  logisticsEmail?: string;
+  logisticsPhone?: string;
+  logisticsAddress?: string;
+  logisticsTaxId?: string;
+}
+
+export interface SourceTrace {
+  sourceSheet?: string;
+  sourceRow?: number;
+  legacyId?: string;
+  sourceHash?: string;
+  version: number;
+  archived?: boolean;
+  notesLog?: Array<{
+    userId: string;
+    author: string;
+    role: Role;
+    note: string;
+    date: string;
+  }>;
+}
+export type OrganizationRole =
+  | "supplier"
+  | "agent"
+  | "jobworker"
+  | "transporter"
+  | "distributor"
+  | "customer"
+  | "legal_entity";
+export interface Organization extends Base, SourceTrace {
+  name: string;
+  roles: OrganizationRole[];
+  email: string;
+  phone: string;
+  address: string;
+  taxId: string;
+  notes: string;
+}
+export interface Person extends Base, SourceTrace {
+  name: string;
+  organizationId?: string;
+  role: "driver" | "pickup" | "delivery" | "contact";
+  email: string;
+  phone: string;
+  notes: string;
+}
+export interface FabricSpec extends Base, SourceTrace {
+  name: string;
+  rangeName: string;
+  width: string;
+  folding: string;
+  weave: string;
+  threadCount: string;
+  construction: string;
+  content: string;
+  supplierId: string;
+  agentId?: string;
+}
+export type FabricOrderStatus =
+  "Ordered" | "Partial" | "Received" | "Cancelled";
+export interface FabricOrder extends Base, SourceTrace {
+  orderBy: string;
+  orderDate: string;
+  poNumber: string;
+  internalItemName: string;
+  fabricSpecId?: string;
+  fabricName: string;
+  supplierId: string;
+  supplierName: string;
+  width: string;
+  folding: string;
+  weave: string;
+  content: string;
+  construction: string;
+  threadCount: string;
+  agentId?: string;
+  agentName: string;
+  fabricType: string;
+  pricePerMetre: number;
+  deliveryDate: string;
+  designs: string;
+  colors: string;
+  quantityOrdered: number;
+  purposeParty: string;
+  fabricFor: string;
+  receivedMetres: number;
+  cancelledMetres: number;
+  status: FabricOrderStatus;
+  remarks: string;
+  fabricValue: number;
+  supplierAcknowledgedAt?: string;
+  supplierDeliveryEstimate?: string;
+  supplierNotes?: string;
+  dispatchDetails?: string;
+}
+export interface FabricReceipt extends Base, SourceTrace {
+  fabricOrderId: string;
+  receiptDate: string;
+  quantityMetres: number;
+  warehouse: string;
+  lotNumber: string;
+  remarks: string;
+}
+export type DeliveryChallanStatus =
+  | "Draft"
+  | "Issued"
+  | "Picked Up"
+  | "Delivered"
+  | "Acknowledged"
+  | "Void"
+  | "Returned";
+export interface TransportMovement extends Base, SourceTrace {
+  fabricOrderId?: string;
+  poNumber: string;
+  fabricName: string;
+  supplierId: string;
+  supplierName: string;
+  partyId?: string;
+  partyName: string;
+  lrDate: string;
+  lrNumber: string;
+  numberOfBales: number;
+  transporterId?: string;
+  transportName: string;
+  fabricQuantity: number;
+  destinationJobworkerId: string;
+  destinationJobworkerName: string;
+  pickedByPersonId?: string;
+  pickedBy: string;
+  challanId?: string;
+  outwardDcNumber: string;
+  dcIssueDate: string;
+  balePickupDate: string;
+  balePickupInward: string;
+  stage: string;
+  priority: string;
+  remarks: string;
+  pricePerMetre: number;
+  priceOverride: boolean;
+  value: number;
+}
+export interface DeliveryChallanLine {
+  id: string;
+  transportMovementId?: string;
+  fabricOrderId?: string;
+  fabricName: string;
+  quantityMetres: number;
+  transportName: string;
+  lrNumber: string;
+  bundles: number;
+  pricePerMetre: number;
+}
+export interface PartySnapshot {
+  name: string;
+  address: string;
+  taxId: string;
+  email: string;
+  phone: string;
+}
+export interface DeliveryChallan extends Base, SourceTrace {
+  number: string;
+  issueDate: string;
+  status: DeliveryChallanStatus;
+  issuer: PartySnapshot;
+  consignee: PartySnapshot;
+  jobworkerId?: string;
+  driverName: string;
+  driverPhone: string;
+  transportName: string;
+  lrNumber: string;
+  purpose: string;
+  terms: string;
+  remarks: string;
+  lines: DeliveryChallanLine[];
+  issuedAt?: string;
+  acknowledgedAt?: string;
+}
+export const PRODUCTION_SIZES = [
+  "S",
+  "M",
+  "L",
+  "XL",
+  "2XL",
+  "3XL",
+  "4XL",
+  "20",
+  "22",
+  "24",
+  "26",
+  "28",
+  "30",
+  "32",
+  "34",
+  "36",
+  "38",
+  "40",
+] as const;
+export type ProductionSize = (typeof PRODUCTION_SIZES)[number];
+export type SizeBreakdown = Partial<Record<ProductionSize, number>>;
+export interface ProductionWorkOrder extends Base, SourceTrace {
+  challanId?: string;
+  dcNumber: string;
+  jobworkerId: string;
+  jobworkerName: string;
+  fabricOutwardDate: string;
+  woNumber: string;
+  brandId?: string;
+  brandName: string;
+  itemName: string;
+  bodyFabric: number;
+  trimFabric: number;
+  issuedDate: string;
+  ageingDays: number;
+  remarks: string;
+  ratio: SizeBreakdown;
+  approvedConsumption?: number;
+  cuttingDate: string;
+  expectedQuantity: number;
+  status: string;
+  lastUpdateDate: string;
+  fiDone: boolean;
+  productionRemarks: string;
+  actualGoodsReadyDate: string;
+  cutting: SizeBreakdown;
+  totalCutQuantity: number;
+  fabricName: string;
+  fabricSupplier: string;
+  pricePerMetre: number;
+  value: number;
+}
+export interface ProductionInward extends Base, SourceTrace {
+  workOrderId: string;
+  inwardDate: string;
+  setwiseQuantity: number;
+  mixPiecesQuantity: number;
+  damagePiecesQuantity: number;
+  totalInward: number;
+  remarks: string;
+}
+export interface Brand extends Base, SourceTrace {
+  name: string;
+}
+export interface ReferenceValue extends Base, SourceTrace {
+  category: "production_status" | "order_status" | "fabric_for";
+  value: string;
+  active: boolean;
+  sortOrder: number;
+}
+export interface ImportIssue extends Base {
+  runId: string;
+  sheet: string;
+  rowNumber: number;
+  severity: "warning" | "error";
+  code: string;
+  message: string;
+  values: Record<string, unknown>;
+  resolved: boolean;
+}
+export interface SyncRun extends Base {
+  fileName: string;
+  status: "preview" | "committed" | "failed";
+  mode: "replace" | "sync";
+  summary: Record<string, number>;
+  sourceFingerprint: string;
+  committedAt?: string;
+  createdBy: string;
+  payload?: string;
+}
+export interface SyncConflict extends Base {
+  runId: string;
+  kind: Kind;
+  recordId?: string;
+  sheet: string;
+  rowNumber: number;
+  field: string;
+  baselineValue: unknown;
+  portalValue: unknown;
+  workbookValue: unknown;
+  resolution?: "portal" | "workbook" | "archive";
+}
+export interface OperationalBackup extends Base {
+  label: string;
+  createdBy: string;
+  counts: Record<string, number>;
+  payload: string;
 }
 export interface Entities {
   contacts: Contact;
@@ -207,6 +505,21 @@ export interface Entities {
   payments: Payment;
   movements: Movement;
   activities: Activity;
+  organizations: Organization;
+  people: Person;
+  fabricSpecs: FabricSpec;
+  fabricOrders: FabricOrder;
+  fabricReceipts: FabricReceipt;
+  transports: TransportMovement;
+  challans: DeliveryChallan;
+  workOrders: ProductionWorkOrder;
+  inwards: ProductionInward;
+  brands: Brand;
+  referenceValues: ReferenceValue;
+  importIssues: ImportIssue;
+  syncRuns: SyncRun;
+  syncConflicts: SyncConflict;
+  operationalBackups: OperationalBackup;
 }
 export type Kind = keyof Entities;
 export interface State {
@@ -222,6 +535,21 @@ export interface State {
   payments: Payment[];
   movements: Movement[];
   activities: Activity[];
+  organizations: Organization[];
+  people: Person[];
+  fabricSpecs: FabricSpec[];
+  fabricOrders: FabricOrder[];
+  fabricReceipts: FabricReceipt[];
+  transports: TransportMovement[];
+  challans: DeliveryChallan[];
+  workOrders: ProductionWorkOrder[];
+  inwards: ProductionInward[];
+  brands: Brand[];
+  referenceValues: ReferenceValue[];
+  importIssues: ImportIssue[];
+  syncRuns: SyncRun[];
+  syncConflicts: SyncConflict[];
+  operationalBackups: Array<Omit<OperationalBackup, "payload">>;
   settings: Settings;
   shopify: {
     configured: boolean;

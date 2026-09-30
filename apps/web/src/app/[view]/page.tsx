@@ -5,9 +5,15 @@ import { Workspace } from "@/components/workspace";
 export const dynamic = "force-dynamic";
 const views = [
   "overview",
+  "master-data",
+  "fabric-orders",
+  "transport-dc",
+  "cleared-lots",
+  "workbook-sync",
   "orders",
   "cutting",
   "production",
+  "garment-production",
   "fabrics",
   "purchases",
   "products",
@@ -27,7 +33,18 @@ export default async function WorkspacePage({
   if (!views.includes(view)) notFound();
   const user = await currentUser();
   if (!user) redirect("/login");
-  if (user.role === "tailor" && !["production", "settings"].includes(view))
-    redirect("/production");
+  if (user.role !== "admin") {
+    const allowed: Record<string, string[]> = {
+      supplier: ["fabric-orders", "transport-dc", "settings"],
+      agent: ["fabric-orders", "settings"],
+      transporter: ["transport-dc", "settings"],
+      delivery: ["transport-dc", "settings"],
+      jobworker: ["transport-dc", "production", "cleared-lots", "settings"],
+      tailor: ["transport-dc", "production", "cleared-lots", "settings"],
+      distributor: ["fabric-orders", "transport-dc", "settings"],
+    };
+    if (!(allowed[user.role] || []).includes(view))
+      redirect(`/${allowed[user.role]?.[0] || "settings"}`);
+  }
   return <Workspace key={view} view={view} initial={await state(user)} />;
 }

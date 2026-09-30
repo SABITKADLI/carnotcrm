@@ -4,6 +4,11 @@ export async function currentUser() {
   return sessionUser((await cookies()).get(SESSION_COOKIE)?.value);
 }
 export function checkOrigin(request: Request) {
+  checkSameOrigin(request);
+  if (!request.headers.get("content-type")?.includes("application/json"))
+    throw new Error("JSON request required");
+}
+export function checkSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
   const url = new URL(request.url);
   const expected = process.env.CRM_PUBLIC_URL
@@ -11,8 +16,6 @@ export function checkOrigin(request: Request) {
     : `${url.protocol}//${request.headers.get("host") || url.host}`;
   if (!origin || origin !== expected)
     throw new Error("Request origin is not allowed");
-  if (!request.headers.get("content-type")?.includes("application/json"))
-    throw new Error("JSON request required");
 }
 export async function readBody(request: Request) {
   if (Number(request.headers.get("content-length") || 0) > 200_000)

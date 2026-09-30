@@ -55,7 +55,7 @@ export function Editor({
     label: `${f.name} · ${f.color} · ${meters(f.stock - f.reserved)} available`,
   }));
   const tailors = state.users
-    .filter((u) => u.role === "tailor" && u.active)
+    .filter((u) => ["tailor", "jobworker"].includes(u.role) && u.active)
     .map((u) => ({ value: u.id, label: u.name }));
   const select = (
     key: string,
@@ -307,7 +307,27 @@ export function Editor({
     fields = [
       txt("name", "Full name"),
       { key: "email", label: "Email", type: "email" },
-      choice("role", "Access level", ["tailor", "admin"]),
+      choice("role", "Access level", [
+        "jobworker",
+        "supplier",
+        "agent",
+        "transporter",
+        "delivery",
+        "distributor",
+        "admin",
+      ]),
+      {
+        ...select(
+          "partnerId",
+          "Linked partner record",
+          state.organizations.map((organization) => ({
+            value: organization.id,
+            label: `${organization.name} · ${organization.roles.join(", ")}`,
+          })),
+        ),
+        required: false,
+        hint: "Required for partner accounts; administrators may leave it blank.",
+      },
       {
         key: "password",
         label: "Temporary password",

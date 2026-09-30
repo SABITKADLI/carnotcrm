@@ -50,6 +50,7 @@ function publicUser(user: User & { password?: string }): User {
     email: user.email,
     role: user.role,
     active: user.active,
+    partnerId: user.partnerId,
   };
 }
 
@@ -62,6 +63,7 @@ export function createUser(
   email: string,
   password: string,
   role: Role,
+  partnerId?: string,
 ) {
   if (password.length < 12 || password.length > 128)
     throw new Error("Use a password between 12 and 128 characters");
@@ -71,6 +73,7 @@ export function createUser(
     email: email.toLowerCase(),
     role,
     active: true,
+    partnerId,
     password: hashPassword(password),
   };
   if (storedUsers().some((u) => u.email.toLowerCase() === user.email))
@@ -129,7 +132,8 @@ export function login(email: string, password: string): string {
       return { error };
     }
   });
-  if (result instanceof Promise) return result.then(unwrap) as unknown as string;
+  if (result instanceof Promise)
+    return result.then(unwrap) as unknown as string;
   return unwrap(result);
 }
 

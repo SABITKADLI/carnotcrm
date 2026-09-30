@@ -5,7 +5,7 @@ import {
   errorMessage,
   readBody,
 } from "@/lib/request";
-import { execute, state } from "@/lib/service";
+import { execute } from "@/lib/service";
 export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
@@ -24,8 +24,13 @@ export async function POST(request: Request) {
       typeof body.input !== "object"
     )
       throw new Error("Invalid request");
-    const result = await execute(user, body.action, body.input, body.operationId);
-    return NextResponse.json({ result, state: await state(user) });
+    const result = await execute(
+      user,
+      body.action,
+      body.input,
+      body.operationId,
+    );
+    return NextResponse.json({ result });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 400 });
   }

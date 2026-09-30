@@ -1486,6 +1486,18 @@ function SettingsView({ state: s, edit, mutate }: Props) {
                     defaultValue={s.settings.companyName}
                   />
                 </Field>
+                <Field label="Portal name">
+                  <input
+                    name="portalName"
+                    defaultValue={s.settings.portalName || "Carnot CRM"}
+                  />
+                </Field>
+                <Field label="Brand identity">
+                  <input
+                    name="brandName"
+                    defaultValue={s.settings.brandName || "Carnot"}
+                  />
+                </Field>
                 <Field label="Email">
                   <input
                     name="email"
@@ -1553,6 +1565,39 @@ function SettingsView({ state: s, edit, mutate }: Props) {
                     defaultValue={s.settings.paymentDetails}
                   />
                 </Field>
+                <Field label="Logistics / challan issuer">
+                  <input
+                    name="logisticsName"
+                    required
+                    defaultValue={s.settings.logisticsName || "Singal Fabrics"}
+                  />
+                </Field>
+                <Field label="Logistics GSTIN">
+                  <input
+                    name="logisticsTaxId"
+                    defaultValue={s.settings.logisticsTaxId}
+                  />
+                </Field>
+                <Field label="Logistics email">
+                  <input
+                    name="logisticsEmail"
+                    type="email"
+                    defaultValue={s.settings.logisticsEmail}
+                  />
+                </Field>
+                <Field label="Logistics phone">
+                  <input
+                    name="logisticsPhone"
+                    defaultValue={s.settings.logisticsPhone}
+                  />
+                </Field>
+                <Field label="Logistics address">
+                  <textarea
+                    name="logisticsAddress"
+                    rows={3}
+                    defaultValue={s.settings.logisticsAddress}
+                  />
+                </Field>
               </div>
               <div className="form-footer">
                 <button className="button primary" disabled={busy}>
@@ -1580,8 +1625,9 @@ function SettingsView({ state: s, edit, mutate }: Props) {
                 </button>
               }
             >
-              Administrators manage the business. Tailors see only their
-              assigned work.
+              Administrators manage the business. Partner accounts are linked to
+              an imported organization or delivery person and see only their
+              records.
             </SectionTitle>
             <Table headings={["Team member", "Access", "Status", ""]}>
               {s.users.map((u) => (
