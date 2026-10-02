@@ -1719,7 +1719,9 @@ function WorkbookSync({
             <br />
             <span className="muted">
               {latest.status} ·{" "}
-              {new Date(latest.createdAt).toLocaleString("en-IN")}
+              {new Date(latest.createdAt).toLocaleString("en-IN", {
+                timeZone: "Asia/Kolkata",
+              })}
             </span>
           </p>
         ) : (

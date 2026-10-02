@@ -920,7 +920,9 @@ function FabricOrderDrawer({
                 >
                   <strong>{note.author}</strong>
                   <span>
-                    {new Date(note.date).toLocaleString("en-IN")} · {note.note}
+                    {new Date(note.date).toLocaleString("en-IN", {
+                      timeZone: "Asia/Kolkata",
+                    })} · {note.note}
                   </span>
                 </article>
               ))}
