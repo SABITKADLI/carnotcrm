@@ -3092,7 +3092,7 @@ td small,
 }
 .detail-grid span,
 .timeline-item span,
-.attachment-row span {
+.attachment-details > span {
   color: var(--muted);
   font-size: 11px;
 }
@@ -3107,14 +3107,81 @@ td small,
   border-bottom: 1px solid var(--line);
   font-size: 12px;
 }
-.attachment-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line);
+.attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
 }
-.attachment-row .danger {
+.attachment-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.attachment-preview,
+.attachment-document {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--paper) 86%, var(--accent));
+  color: var(--ink);
+  text-decoration: none;
+}
+.attachment-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 180ms ease;
+}
+.attachment-preview > span,
+.attachment-document > span {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(31, 48, 44, 0.88);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+.attachment-document > span {
+  position: static;
+  margin-top: 10px;
+  opacity: 1;
+  transform: none;
+}
+.attachment-preview:hover img,
+.attachment-preview:focus-visible img {
+  transform: scale(1.025);
+}
+.attachment-preview:hover > span,
+.attachment-preview:focus-visible > span {
+  opacity: 1;
+  transform: translateY(0);
+}
+.attachment-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 10px;
+}
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-details .danger {
+  grid-column: 2 / -1;
+  justify-self: end;
   margin-left: auto;
   color: #a33f35;
 }

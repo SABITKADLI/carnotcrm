@@ -888,32 +888,70 @@ function FabricOrderDrawer({
               </div>
               {message && <p className="form-note">{message}</p>}
               {attachments.length ? (
-                attachments.map((item) => (
-                  <div className="attachment-row" key={item.id}>
-                    <Paperclip size={15} />
-                    <a
-                      className="text-link"
-                      href={`/api/attachments/${item.id}/download`}
-                      target="_blank"
-                    >
-                      {item.fileName}
-                    </a>
-                    <span>{(item.sizeBytes / 1024).toFixed(0)} KB</span>
-                    {state.user.role === "admin" && (
-                      <button
-                        className="text-link danger"
-                        onClick={async () => {
-                          await fetch(`/api/attachments/${item.id}`, {
-                            method: "DELETE",
-                          });
-                          window.location.reload();
-                        }}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                ))
+                <div className="attachment-grid">
+                  {attachments.map((item) => {
+                    const attachmentUrl = `/api/attachments/${item.id}/download`;
+                    const isImage = item.contentType.startsWith("image/");
+                    return (
+                      <article className="attachment-card" key={item.id}>
+                        {isImage ? (
+                          <a
+                            className="attachment-preview"
+                            href={attachmentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Open ${item.fileName}`}
+                          >
+                            {/* Authenticated attachment redirects cannot use the Next image optimizer. */}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={attachmentUrl}
+                              alt={`Preview of ${item.fileName}`}
+                              loading="lazy"
+                            />
+                            <span>Open image</span>
+                          </a>
+                        ) : (
+                          <a
+                            className="attachment-document"
+                            href={attachmentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Open ${item.fileName}`}
+                          >
+                            <FileText size={28} />
+                            <span>Open PDF</span>
+                          </a>
+                        )}
+                        <div className="attachment-details">
+                          <Paperclip size={14} />
+                          <a
+                            className="text-link attachment-name"
+                            href={attachmentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {item.fileName}
+                          </a>
+                          <span>{(item.sizeBytes / 1024).toFixed(0)} KB</span>
+                          {state.user.role === "admin" && (
+                            <button
+                              className="text-link danger"
+                              onClick={async () => {
+                                await fetch(`/api/attachments/${item.id}`, {
+                                  method: "DELETE",
+                                });
+                                window.location.reload();
+                              }}
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
               ) : (
                 <p className="muted">JPEG, PNG, WebP, or PDF up to 10 MB.</p>
               )}
