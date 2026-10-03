@@ -405,11 +405,13 @@ export function EnhancedFabricOrders({
   state,
   query,
   mutate,
+  refresh,
   filters = {},
 }: {
   state: State;
   query: string;
   mutate: Mutate;
+  refresh: () => Promise<void>;
   filters?: OperationFilters;
 }) {
   const period = usePeriodSelection(filters);
@@ -611,6 +613,7 @@ export function EnhancedFabricOrders({
           order={selected}
           state={state}
           mutate={mutate}
+          refresh={refresh}
           close={() => setSelectedId("")}
           busy={busy}
           setBusy={setBusy}
@@ -626,6 +629,7 @@ function FabricOrderDrawer({
   order,
   state,
   mutate,
+  refresh,
   close,
   busy,
   setBusy,
@@ -635,6 +639,7 @@ function FabricOrderDrawer({
   order: FabricOrder;
   state: State;
   mutate: Mutate;
+  refresh: () => Promise<void>;
   close: () => void;
   busy: boolean;
   setBusy: (value: boolean) => void;
@@ -739,6 +744,7 @@ function FabricOrderDrawer({
         id: order.id,
         note: `Attached ${file.name}`,
       });
+      await refresh();
       setMessage("Attachment uploaded");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Upload failed");
@@ -941,7 +947,8 @@ function FabricOrderDrawer({
                                 await fetch(`/api/attachments/${item.id}`, {
                                   method: "DELETE",
                                 });
-                                window.location.reload();
+                                await refresh();
+                                setMessage("Attachment removed");
                               }}
                             >
                               Remove

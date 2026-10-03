@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { attachmentTypes } from "@/lib/attachments";
 import { audit } from "@/lib/service";
-import { get, put, withStore } from "@/lib/db";
+import { get, put, transaction } from "@/lib/db";
 import {
   checkOrigin,
   currentUser,
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
         s3Key: z.string().min(1).max(1000),
       })
       .parse(await readBody(request));
-    const attachment = await withStore(() => {
+    const attachment = await transaction(() => {
       const order = get("fabricOrders", body.entityId);
       if (!body.s3Key.includes(`/${body.entityId}/${body.attachmentId}/`))
         throw new Error("Attachment key does not match this order");

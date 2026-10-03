@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { audit } from "@/lib/service";
-import { get, put, withStore } from "@/lib/db";
+import { get, put, transaction } from "@/lib/db";
 import { checkSameOrigin, currentUser, errorMessage } from "@/lib/request";
 
 export const runtime = "nodejs";
@@ -16,7 +16,7 @@ export async function DELETE(
     if (user.role !== "admin")
       return NextResponse.json({ error: "Administrator access required" }, { status: 403 });
     const { id } = await params;
-    const attachment = await withStore(() => {
+    const attachment = await transaction(() => {
       const item = get("attachments", id);
       const order = get("fabricOrders", item.entityId);
       const value = put("attachments", {

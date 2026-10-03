@@ -476,6 +476,7 @@ export function OperationsViews({
         state={state}
         query={query}
         mutate={mutate}
+        refresh={refresh}
         filters={filters}
       />
     );
