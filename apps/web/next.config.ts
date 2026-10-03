@@ -1,5 +1,10 @@
 import type { NextConfig } from "next";
 
+const s3Origin =
+  process.env.S3_BUCKET_NAME && process.env.AWS_REGION
+    ? `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com`
+    : "";
+
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
@@ -18,7 +23,7 @@ const nextConfig: NextConfig = {
           {
             key: "Content-Security-Policy",
             value:
-              "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+              `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'${s3Origin ? ` ${s3Origin}` : ""}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
           },
         ],
       },

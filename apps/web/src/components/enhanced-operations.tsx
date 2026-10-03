@@ -707,11 +707,18 @@ function FabricOrderDrawer({
       });
       const presign = await presignResponse.json();
       if (!presignResponse.ok) throw new Error(presign.error);
-      const uploadResponse = await fetch(presign.uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
+      let uploadResponse: Response;
+      try {
+        uploadResponse = await fetch(presign.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file.type },
+          body: file,
+        });
+      } catch {
+        throw new Error(
+          "The browser could not reach attachment storage. Refresh the page and try again.",
+        );
+      }
       if (!uploadResponse.ok)
         throw new Error(
           "S3 rejected the upload. Check bucket CORS and credentials.",
