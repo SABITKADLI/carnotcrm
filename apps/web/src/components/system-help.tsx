@@ -97,10 +97,10 @@ export const SYSTEM_GUIDE_SCREENS: Array<{
   { view: "workbook-sync", title: "Workbook Sync", simple: "Admin-only Excel preview, conflict review, import and export. It never silently deletes portal data.", status: "connected" },
   { view: "cutting", title: "Cutting Room", simple: "The marker-planning engine is preserved, but this screen is being rebuilt for the new fabric-PO workflow.", status: "separate" },
   { view: "products", title: "Finished Goods", simple: "Accepted garments, available stock, selling prices and Shopify allocations.", status: "connected" },
-  { view: "customers", title: "Customers", simple: "The customer workspace is being rebuilt. Invoice customer records still exist, but they are separate from operational parties.", status: "separate" },
+  { view: "customers", title: "Customers", simple: "Customer and party organizations are shared by fabric orders and invoices. Save them once in Master Data or Customers.", status: "connected" },
   { view: "suppliers", title: "Suppliers / Vendors", simple: "A focused view of supplier master records and their contact details.", status: "connected" },
   { view: "invoices", title: "Billing & Payments", simple: "Sell fabric or finished garments, issue an invoice, reduce stock and record payments.", status: "connected" },
-  { view: "reports", title: "Reports", simple: "Sales and receivables are connected. Some production and material report rows still use the preserved older garment-order records.", status: "partial" },
+  { view: "reports", title: "Reports", simple: "Review purchasing, receipts, transport, production stages, jobworkers, inward, discrepancies and billing for a selected period.", status: "connected" },
   { view: "activity", title: "Activity Log", simple: "The latest important changes, who made them and which record changed.", status: "connected" },
   { view: "settings", title: "Settings", simple: "Company and challan details, user accounts, passwords and Shopify connection status.", status: "connected" },
 ];
@@ -124,28 +124,12 @@ export const SYSTEM_ROLE_GUIDES: Array<{
 
 const gaps = [
   {
-    title: "Customers and operational parties are two lists",
-    body: "Billing uses customer contact records. Fabric operations use distributor/party organizations. Choosing a party on a fabric order does not automatically choose the invoice customer yet.",
-  },
-  {
     title: "Cutting Room is not on the new chain yet",
     body: "The older marker planner can calculate fabric use and waste, but it does not yet create the cutting plan for a new production work order made from a delivery challan.",
   },
   {
-    title: "Delivery-person assignment is only partly connected",
-    body: "Imported transport rows can point to a person. The new delivery-challan form still stores the driver as text, so a delivery login only sees rows that have an explicit person link.",
-  },
-  {
-    title: "Reports are mixed",
-    body: "Invoice sales and receivables are live. The production-performance export still reads the preserved older garment-order workflow, so it is not a complete report of the new work-order chain.",
-  },
-  {
     title: "Shopify sizes need separate stock records",
     body: "Shopify publishes by finished-goods batch SKU. If each size needs its own Shopify variant and stock count, sizes must be split before publication.",
-  },
-  {
-    title: "Older garment-order data is preserved",
-    body: "The old garment-order and garment-job menu tabs were removed. Their records and engine remain for compatibility, but they are not the main Singal Fabrics workflow.",
   },
 ];
 

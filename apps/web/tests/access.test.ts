@@ -37,9 +37,9 @@ test("the guide labels the known connection gaps honestly", () => {
   const status = Object.fromEntries(
     SYSTEM_GUIDE_SCREENS.map((item) => [item.view, item.status]),
   );
-  assert.equal(status.customers, "separate");
+  assert.equal(status.customers, "connected");
   assert.equal(status.cutting, "separate");
-  assert.equal(status.reports, "partial");
+  assert.equal(status.reports, "connected");
   assert.equal(status.production, "connected");
   assert.equal(status.invoices, "connected");
 });

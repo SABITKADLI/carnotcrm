@@ -13,7 +13,7 @@ export async function POST(
 ) {
   try {
     checkOrigin(request);
-    await readBody(request);
+    const body = await readBody(request);
     const user = await currentUser();
     if (!user)
       return NextResponse.json(
@@ -21,7 +21,11 @@ export async function POST(
         { status: 401 },
       );
     const { runId } = await params;
-    return NextResponse.json(await commitWorkbook(runId, user));
+    return NextResponse.json(
+      await commitWorkbook(runId, user, {
+        ignoreIncomplete: body.ignoreIncomplete === true,
+      }),
+    );
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 400 });
   }

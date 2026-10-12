@@ -180,6 +180,7 @@ export interface Payment extends Base {
 }
 export interface Movement extends Base {
   fabricId?: string;
+  fabricOrderId?: string;
   productId?: string;
   quantity: number;
   type: string;
@@ -400,6 +401,7 @@ export interface DeliveryChallan extends Base, SourceTrace {
   consignee: PartySnapshot;
   jobworkerId?: string;
   driverName: string;
+  driverPersonId?: string;
   driverPhone: string;
   transportName: string;
   lrNumber: string;

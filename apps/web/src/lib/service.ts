@@ -20,15 +20,9 @@ import {
   setUserActive,
   users,
 } from "./auth";
-import { createPlan } from "./cutting";
 import type {
-  Contact,
-  Fabric,
   Invoice,
   InvoiceLine,
-  Job,
-  Order,
-  Piece,
   State,
   User,
 } from "./types";
@@ -73,7 +67,7 @@ function movement(
   type: string,
   reference: string,
   quantity: number,
-  ids: { fabricId?: string; productId?: string },
+  ids: { fabricId?: string; fabricOrderId?: string; productId?: string },
   note = "",
 ) {
   put("movements", {
@@ -87,9 +81,16 @@ function movement(
   });
 }
 function customer(id: unknown) {
-  const contact = get("contacts", str(id));
-  if (contact.type !== "customer") throw new Error("Select a customer");
-  return contact;
+  const customerId = str(id);
+  const organization = all("organizations").find(
+    (item) => item.id === customerId && !item.archived,
+  );
+  if (organization) {
+    if (!organization.roles.some((role) => role === "customer" || role === "distributor"))
+      throw new Error("Select a customer / party");
+    return organization;
+  }
+  throw new Error("Select a customer / party from Master Data");
 }
 export function state(user: User, includeOperations = true): State {
   return withStore(() => {
@@ -163,12 +164,8 @@ export function state(user: User, includeOperations = true): State {
               (workOrder) => workOrder.id === inward.workOrderId,
             ),
           );
-    const jobs = all("jobs").filter(
-      (j) => user.role === "admin" || j.tailorId === user.id,
-    );
-    const orders = all("orders").filter(
-      (o) => user.role === "admin" || jobs.some((j) => j.orderId === o.id),
-    );
+    const jobs: State["jobs"] = [];
+    const orders: State["orders"] = [];
     if (user.role !== "admin") {
       return {
         user,
@@ -246,9 +243,9 @@ export function state(user: User, includeOperations = true): State {
     return {
       user,
       users: team,
-      contacts: all("contacts"),
-      fabrics: all("fabrics"),
-      purchases: all("purchases"),
+      contacts: [],
+      fabrics: [],
+      purchases: [],
       orders,
       jobs,
       products: all("products"),
@@ -328,44 +325,8 @@ export function execute(
   });
 }
 function perform(user: User, action: string, input: Input): unknown {
-  if (action === "progress") {
-    const job = get("jobs", str(input.id));
-    if (user.role !== "admin" && job.tailorId !== user.id)
-      throw new Error("You can only update your own assignments");
-    if (job.status === "accepted")
-      throw new Error("This job is already closed");
-    const cut = integer(input.cut, job.cut, job.quantity);
-    const sewn = integer(input.sewn, job.sewn, cut);
-    const finished = integer(input.finished, job.finished, sewn);
-    const updated = put("jobs", {
-      ...job,
-      cut,
-      sewn,
-      finished,
-      notes: optional(input.notes),
-      status:
-        finished === job.quantity
-          ? "submitted"
-          : finished > 0
-            ? "finishing"
-            : sewn > 0
-              ? "stitching"
-              : cut > 0
-                ? "cutting"
-                : "assigned",
-    });
-    const order = get("orders", job.orderId);
-    const jobs = all("jobs").filter((j) => j.orderId === order.id);
-    if (jobs.reduce((sum, j) => sum + j.finished, 0) === order.quantity)
-      put("orders", { ...order, status: "quality" });
-    audit(
-      user,
-      "Updated production",
-      order.number,
-      `${cut} cut · ${sewn} stitched · ${finished} finished. ${updated.notes}`,
-    );
-    return updated;
-  }
+  if (["fabric", "adjustStock", "purchase", "receive", "order", "plan", "cancelOrder", "assign", "quality", "progress", "contact"].includes(action))
+    throw new Error("This older workflow has been retired. Use Fabric Orders, Production, Master Data and Customers.");
   if (action === "changePassword") {
     resetPassword(user.id, str(input.password, 128));
     audit(user, "Changed password", user.name);
@@ -799,32 +760,19 @@ function perform(user: User, action: string, input: Input): unknown {
       const status = z
         .enum(["Ordered", "Partial", "Received", "Cancelled"])
         .parse(input.status);
-      let receivedMetres =
-        input.receivedMetres === undefined || input.receivedMetres === ""
-          ? order.receivedMetres
-          : num(input.receivedMetres, 0, order.quantityOrdered);
+      if (status === "Partial" || status === "Received")
+        throw new Error("Record the actual received quantity through Mark received");
+      const receivedMetres = order.receivedMetres;
       let cancelledMetres =
         input.cancelledMetres === undefined || input.cancelledMetres === ""
           ? order.cancelledMetres
           : num(input.cancelledMetres, 0, order.quantityOrdered);
-      if (status === "Received") {
-        receivedMetres = order.quantityOrdered - cancelledMetres;
-      } else if (
-        status === "Cancelled" &&
-        input.cancelledMetres === undefined
-      ) {
+      if (status === "Cancelled" && input.cancelledMetres === undefined) {
         cancelledMetres = order.quantityOrdered - receivedMetres;
       }
       if (receivedMetres + cancelledMetres > order.quantityOrdered)
         throw new Error(
           "Received and cancelled metres cannot exceed ordered metres",
-        );
-      if (
-        status === "Partial" &&
-        !(receivedMetres > 0 && receivedMetres < order.quantityOrdered)
-      )
-        throw new Error(
-          "Partial orders require received metres between zero and the ordered quantity",
         );
       if (status === "Ordered" && receivedMetres > 0)
         throw new Error("An order with receipts must be Partial or Received");
@@ -992,6 +940,16 @@ function perform(user: User, action: string, input: Input): unknown {
       const transporter = get("organizations", str(input.transporterId));
       const quantity = num(input.fabricQuantity, 0.001),
         price = order?.pricePerMetre || num(input.pricePerMetre ?? 0, 0);
+      if (order) {
+        const alreadyDispatched = all("transports")
+          .filter((item) => item.fabricOrderId === order.id && !["Void", "Returned"].includes(item.stage))
+          .reduce((sum, item) => sum + item.fabricQuantity, 0);
+        const alreadySold = all("movements")
+          .filter((item) => item.fabricOrderId === order.id && item.type === "Direct sale")
+          .reduce((sum, item) => sum - item.quantity / 1000, 0);
+        if (quantity > Math.max(0, order.receivedMetres - alreadyDispatched - alreadySold) + 0.0005)
+          throw new Error(`${order.poNumber}: dispatch exceeds received fabric available in stock`);
+      }
       const existingNumbers = all("challans").map((challan) =>
         Number(challan.number.match(/SF(\d+)/i)?.[1] || 0),
       );
@@ -1000,7 +958,50 @@ function perform(user: User, action: string, input: Input): unknown {
         `SF${Math.max(1386, ...existingNumbers) + 1}`;
       const issueDate = date(input.dcIssueDate),
         transportName = transporter.name,
-        pickedBy = str(input.pickedBy, 120);
+        selectedPersonId = optional(input.pickedByPersonId, 100),
+        selectedPerson = selectedPersonId
+          ? get("people", selectedPersonId)
+          : undefined,
+        pickedBy = selectedPerson?.name || str(input.pickedBy, 120);
+      if (
+        selectedPerson &&
+        selectedPerson.organizationId &&
+        selectedPerson.organizationId !== transporter.id
+      )
+        throw new Error("This driver belongs to another transporter");
+      if (selectedPerson && !["driver", "pickup", "delivery"].includes(selectedPerson.role))
+        throw new Error("Select a driver, pickup or delivery person");
+      const driverPhone = optional(input.driverPhone, 50);
+      const person = selectedPerson
+        ? put("people", {
+            ...selectedPerson,
+            organizationId: transporter.id,
+            phone: driverPhone || selectedPerson.phone,
+            version: selectedPerson.version + 1,
+          })
+        : (() => {
+            const existing = all("people").find(
+              (item) =>
+                item.name.toLowerCase() === pickedBy.toLowerCase() &&
+                item.organizationId === transporter.id,
+            );
+            return existing
+              ? put("people", {
+                  ...existing,
+                  phone: driverPhone || existing.phone,
+                  version: existing.version + 1,
+                })
+              : put("people", {
+                  ...base("person"),
+                  version: 1,
+                  name: pickedBy,
+                  organizationId: transporter.id,
+                  role: "driver" as const,
+                  email: "",
+                  phone: driverPhone,
+                  notes: "Created from delivery challan",
+                });
+          })();
       const movement = put("transports", {
         ...base("tm"),
         version: 1,
@@ -1019,6 +1020,7 @@ function perform(user: User, action: string, input: Input): unknown {
         fabricQuantity: quantity,
         destinationJobworkerId: jobworker.id,
         destinationJobworkerName: jobworker.name,
+        pickedByPersonId: person.id,
         pickedBy,
         outwardDcNumber: dcNumber,
         dcIssueDate: issueDate,
@@ -1053,8 +1055,9 @@ function perform(user: User, action: string, input: Input): unknown {
           phone: jobworker.phone,
         },
         jobworkerId: jobworker.id,
+        driverPersonId: person.id,
         driverName: pickedBy,
-        driverPhone: optional(input.driverPhone, 50),
+        driverPhone: person.phone,
         transportName,
         lrNumber: optional(input.lrNumber, 100),
         purpose:
@@ -1209,6 +1212,7 @@ function perform(user: User, action: string, input: Input): unknown {
         ...base("mov"),
         quantity: Math.round(quantityMetres * 1000),
         type: "Fabric receipt",
+        fabricOrderId: order.id,
         reference: order.poNumber,
         actor: user.name,
         note: receipt.remarks,
@@ -1267,324 +1271,6 @@ function perform(user: User, action: string, input: Input): unknown {
       );
       return updated;
     }
-    case "contact": {
-      const type = z.enum(["customer", "supplier"]).parse(input.type);
-      const existing = input.id ? get("contacts", str(input.id)) : base("ct");
-      const contact: Contact = {
-        ...existing,
-        name: str(input.name, 120),
-        email: optional(input.email, 254),
-        phone: optional(input.phone, 50),
-        address: optional(input.address),
-        taxId: optional(input.taxId, 80),
-        notes: optional(input.notes),
-        type,
-      };
-      if (contact.email) z.email().parse(contact.email);
-      put("contacts", contact);
-      audit(user, "Saved " + type, contact.name);
-      return contact;
-    }
-    case "fabric": {
-      const sku = str(input.sku, 80);
-      if (all("fabrics").some((f) => f.sku.toLowerCase() === sku.toLowerCase()))
-        throw new Error("This fabric SKU already exists");
-      const stock = input.stock ? mm(input.stock) : 0;
-      const fabric: Fabric = {
-        ...base("fab"),
-        name: str(input.name, 120),
-        sku,
-        composition: optional(input.composition, 150),
-        color: str(input.color, 80),
-        width: integer(input.width, 100, 5000),
-        gsm: num(input.gsm, 1, 1500),
-        lot: optional(input.lot, 80),
-        location: optional(input.location, 80),
-        stock,
-        reserved: 0,
-        reorder: Math.round(num(input.reorder) * 1000),
-        cost: cents(input.cost),
-        price: cents(input.price),
-      };
-      put("fabrics", fabric);
-      if (stock)
-        movement(user, "Opening stock", fabric.sku, stock, {
-          fabricId: fabric.id,
-        });
-      audit(user, "Added fabric", fabric.name);
-      return fabric;
-    }
-    case "adjustStock": {
-      const fabric = get("fabrics", str(input.id));
-      const change = Math.round(num(input.quantity, -1e6, 1e6) * 1000);
-      const reason = str(input.reason);
-      if (fabric.stock + change < fabric.reserved)
-        throw new Error(
-          "Adjustment would reduce stock below reserved quantity",
-        );
-      put("fabrics", { ...fabric, stock: fabric.stock + change });
-      movement(
-        user,
-        "Adjustment",
-        fabric.sku,
-        change,
-        { fabricId: fabric.id },
-        reason,
-      );
-      audit(user, "Adjusted stock", fabric.sku, reason);
-      return { success: true };
-    }
-    case "purchase": {
-      const supplier = get("contacts", str(input.supplierId));
-      if (supplier.type !== "supplier") throw new Error("Select a supplier");
-      const fabric = get("fabrics", str(input.fabricId));
-      const purchase = put("purchases", {
-        ...base("po"),
-        number: sequence("purchases", "PO"),
-        supplierId: supplier.id,
-        fabricId: fabric.id,
-        quantity: mm(input.quantity),
-        received: 0,
-        unitCost: cents(input.unitCost),
-        dueDate: date(input.dueDate),
-        notes: optional(input.notes),
-        status: "ordered",
-      });
-      audit(user, "Created purchase order", purchase.number, fabric.name);
-      return purchase;
-    }
-    case "receive": {
-      const po = get("purchases", str(input.id));
-      const quantity = mm(input.quantity);
-      if (quantity > po.quantity - po.received)
-        throw new Error("Receipt exceeds the outstanding purchase quantity");
-      const fabric = get("fabrics", po.fabricId);
-      const cost = Math.round(
-        (fabric.stock * fabric.cost + quantity * po.unitCost) /
-          (fabric.stock + quantity),
-      );
-      put("fabrics", { ...fabric, stock: fabric.stock + quantity, cost });
-      put("purchases", {
-        ...po,
-        received: po.received + quantity,
-        status: po.received + quantity === po.quantity ? "received" : "partial",
-      });
-      movement(user, "Purchase receipt", po.number, quantity, {
-        fabricId: fabric.id,
-      });
-      audit(user, "Received fabric", po.number, `${quantity / 1000} m`);
-      return { success: true };
-    }
-    case "order": {
-      const client = customer(input.customerId);
-      const fabric = get("fabrics", str(input.fabricId));
-      const order: Order = {
-        ...base("ord"),
-        number: sequence("orders", "CO"),
-        name: str(input.name, 150),
-        customerId: client.id,
-        fabricId: fabric.id,
-        category: z
-          .enum([
-            "Shirts",
-            "Trousers",
-            "Womenswear",
-            "Dresses",
-            "Uniforms",
-            "Other",
-          ])
-          .parse(input.category),
-        quantity: integer(input.quantity, 1, 5000),
-        sizes: str(input.sizes, 1000),
-        dueDate: date(input.dueDate),
-        priority: z.enum(["Normal", "High", "Urgent"]).parse(input.priority),
-        notes: optional(input.notes, 6000),
-        unitPrice: cents(input.unitPrice),
-        laborCost: cents(input.laborCost),
-        status: "draft",
-        issued: 0,
-        accepted: 0,
-        rejected: 0,
-      };
-      put("orders", order);
-      audit(user, "Created garment order", order.number, order.name);
-      return order;
-    }
-    case "plan": {
-      const order = get("orders", str(input.id));
-      if (!["draft", "planned"].includes(order.status))
-        throw new Error("Only unissued orders can be replanned");
-      const fabric = get("fabrics", order.fabricId);
-      const pieces = z
-        .array(
-          z.object({
-            name: z.string().min(1).max(80),
-            width: z.number(),
-            length: z.number(),
-            count: z.number().int(),
-            rotate: z.boolean(),
-          }),
-        )
-        .min(1)
-        .max(30)
-        .parse(input.pieces) as Piece[];
-      const plan = createPlan(
-        fabric.width,
-        order.quantity,
-        pieces,
-        integer(input.allowance, 0, 100),
-        num(input.shrinkage, 0, 20),
-        integer(input.gap, 0, 50),
-      );
-      const old = order.plan?.length || 0;
-      if (plan.length > fabric.stock - fabric.reserved + old)
-        throw new Error(
-          `Insufficient fabric: plan requires ${(plan.length / 1000).toFixed(3)} m`,
-        );
-      put("fabrics", {
-        ...fabric,
-        reserved: fabric.reserved - old + plan.length,
-      });
-      put("orders", { ...order, plan, status: "planned" });
-      audit(
-        user,
-        "Approved cutting estimate",
-        order.number,
-        `${plan.length / 1000} m reserved · ${plan.utilization}% utilization`,
-      );
-      return plan;
-    }
-    case "cancelOrder": {
-      const order = get("orders", str(input.id));
-      if (!["draft", "planned"].includes(order.status))
-        throw new Error(
-          "An order cannot be cancelled after fabric has been issued",
-        );
-      if (order.plan) {
-        const fabric = get("fabrics", order.fabricId);
-        put("fabrics", {
-          ...fabric,
-          reserved: fabric.reserved - order.plan.length,
-        });
-      }
-      put("orders", { ...order, status: "cancelled" });
-      audit(user, "Cancelled order", order.number, str(input.reason));
-      return { success: true };
-    }
-    case "assign": {
-      const order = get("orders", str(input.orderId));
-      if (!["planned", "production"].includes(order.status) || !order.plan)
-        throw new Error("Approve a cutting plan before assigning production");
-      const tailor = users().find(
-        (u) =>
-          u.id === input.tailorId &&
-          ["tailor", "jobworker"].includes(u.role) &&
-          u.active,
-      );
-      if (!tailor) throw new Error("Select an active tailor");
-      const quantity = integer(input.quantity, 1, order.quantity);
-      if (
-        all("jobs")
-          .filter((j) => j.orderId === order.id)
-          .reduce((s, j) => s + j.quantity, 0) +
-          quantity >
-        order.quantity
-      )
-        throw new Error("Assignments exceed the order quantity");
-      if (!order.issued) {
-        const fabric = get("fabrics", order.fabricId);
-        if (
-          fabric.stock < order.plan.length ||
-          fabric.reserved < order.plan.length
-        )
-          throw new Error("Fabric reservation is unavailable");
-        put("fabrics", {
-          ...fabric,
-          stock: fabric.stock - order.plan.length,
-          reserved: fabric.reserved - order.plan.length,
-        });
-        movement(user, "Production issue", order.number, -order.plan.length, {
-          fabricId: fabric.id,
-        });
-        put("orders", {
-          ...order,
-          issued: order.plan.length,
-          issuedCost: Math.round((order.plan.length / 1000) * fabric.cost),
-          status: "production",
-        });
-      }
-      const job: Job = {
-        ...base("job"),
-        orderId: order.id,
-        tailorId: tailor.id,
-        quantity,
-        cut: 0,
-        sewn: 0,
-        finished: 0,
-        status: "assigned",
-        notes: optional(input.notes),
-        dueDate: date(input.dueDate),
-      };
-      put("jobs", job);
-      audit(
-        user,
-        "Assigned production",
-        order.number,
-        `${quantity} pieces → ${tailor.name}`,
-      );
-      return job;
-    }
-    case "quality": {
-      const order = get("orders", str(input.id));
-      if (order.status !== "quality")
-        throw new Error(
-          "All pieces must be submitted before final quality review",
-        );
-      const accepted = integer(input.accepted, 0, order.quantity);
-      const rejected = order.quantity - accepted;
-      const note = str(input.notes);
-      const jobs = all("jobs").filter((j) => j.orderId === order.id);
-      if (jobs.reduce((s, j) => s + j.finished, 0) !== order.quantity)
-        throw new Error("Production is incomplete");
-      if (all("products").some((p) => p.orderId === order.id))
-        throw new Error(
-          "This order has already been received into finished stock",
-        );
-      for (const job of jobs) put("jobs", { ...job, status: "accepted" });
-      put("orders", { ...order, status: "ready", accepted, rejected });
-      if (accepted) {
-        const product = put("products", {
-          ...base("prd"),
-          name: order.name,
-          sku: `${order.number}-${order.category.toUpperCase().slice(0, 3)}`,
-          orderId: order.id,
-          category: order.category,
-          sizes: order.sizes,
-          stock: accepted,
-          price: order.unitPrice,
-          cost: Math.round(
-            ((order.issuedCost || 0) + order.laborCost * order.quantity) /
-              accepted,
-          ),
-          channelStock: 0,
-        });
-        movement(
-          user,
-          "Quality accepted",
-          order.number,
-          accepted,
-          { productId: product.id },
-          note,
-        );
-      }
-      audit(
-        user,
-        "Completed quality review",
-        order.number,
-        `${accepted} accepted · ${rejected} rejected. ${note}`,
-      );
-      return { success: true };
-    }
     case "invoice": {
       const client = customer(input.customerId);
       const config = settings();
@@ -1604,22 +1290,26 @@ function perform(user: User, action: string, input: Input): unknown {
       const lines: InvoiceLine[] = inputs.map((line) => {
         const price = cents(line.price);
         if (line.kind === "fabric") {
-          const fabric = get("fabrics", line.itemId);
-          const quantity = mm(line.quantity);
-          if (quantity > fabric.stock - fabric.reserved)
-            throw new Error(`${fabric.name}: insufficient available fabric`);
-          put("fabrics", { ...fabric, stock: fabric.stock - quantity });
-          movement(user, "Direct sale", number, -quantity, {
-            fabricId: fabric.id,
-          });
-          return {
-            ...line,
-            description: `${fabric.name} · ${fabric.sku}`,
-            quantity: quantity / 1000,
-            unit: "m",
-            price,
-            total: Math.round((quantity / 1000) * price),
-          };
+          const po = all("fabricOrders").find((order) => order.id === line.itemId && !order.archived);
+          if (!po) throw new Error("Select a received fabric purchase order");
+            const quantity = mm(line.quantity);
+            const dispatched = all("transports")
+              .filter((item) => item.fabricOrderId === po.id && item.stage !== "Void" && item.stage !== "Returned")
+              .reduce((sum, item) => sum + item.fabricQuantity, 0);
+            const sold = all("movements")
+              .filter((item) => item.fabricOrderId === po.id && item.type === "Direct sale")
+              .reduce((sum, item) => sum - item.quantity / 1000, 0);
+            if (line.quantity > Math.max(0, po.receivedMetres - dispatched - sold) + 0.0005)
+              throw new Error(`${po.poNumber}: insufficient received fabric in stock`);
+            movement(user, "Direct sale", number, -quantity, { fabricOrderId: po.id });
+            return {
+              ...line,
+              description: `${po.fabricName} · ${po.poNumber}`,
+              quantity: quantity / 1000,
+              unit: "m",
+              price,
+              total: Math.round((quantity / 1000) * price),
+            };
         }
         const product = get("products", line.itemId);
         const quantity = integer(line.quantity, 1, 100000);
@@ -1710,8 +1400,7 @@ function perform(user: User, action: string, input: Input): unknown {
       }
       if (
         currency !== settings().currency &&
-        (all("fabrics").length ||
-          all("orders").length ||
+        (all("fabricOrders").length ||
           all("invoices").length)
       )
         throw new Error(

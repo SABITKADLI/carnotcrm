@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { Plus, Trash2, Loader2, ArrowRight } from "lucide-react";
 import { Dialog, Field } from "./ui";
-import { money, meters, type State } from "@/lib/types";
+import { money, type State } from "@/lib/types";
 export interface EditRequest {
   type: string;
   data?: Record<string, unknown>;
@@ -45,19 +45,18 @@ export function Editor({
   const [lines, setLines] = useState([
     { kind: "product", itemId: "", quantity: 1, price: 0 },
   ]);
-  const customers = state.contacts
-    .filter((c) => c.type === "customer")
-    .map((c) => ({ value: c.id, label: c.name }));
-  const suppliers = state.contacts
-    .filter((c) => c.type === "supplier")
-    .map((c) => ({ value: c.id, label: c.name }));
-  const fabrics = state.fabrics.map((f) => ({
-    value: f.id,
-    label: `${f.name} · ${f.color} · ${meters(f.stock - f.reserved)} available`,
-  }));
-  const tailors = state.users
-    .filter((u) => ["tailor", "jobworker"].includes(u.role) && u.active)
-    .map((u) => ({ value: u.id, label: u.name }));
+  const customers = state.organizations
+    .filter(
+      (organization) =>
+        !organization.archived &&
+        organization.roles.some((role) =>
+          ["customer", "distributor"].includes(role),
+        ),
+    )
+    .map((organization) => ({
+      value: organization.id,
+      label: organization.name,
+    }));
   const linkedPartnerOptions =
     newUserRole === "delivery"
       ? state.people
@@ -118,181 +117,12 @@ export function Editor({
       options.map((v) => ({ value: v, label: v })),
       value,
     );
+  const action = type;
   let title = "New record",
-    action = type,
     description = "",
     fields: FieldDef[] = [],
     submit = "Save record";
-  if (["customer", "supplier"].includes(type)) {
-    title = `${d.id ? "Edit" : "New"} ${type}`;
-    action = "contact";
-    fields = [
-      txt("name", "Company / contact name"),
-      { ...txt("email", "Email", "", false), type: "email" },
-      txt("phone", "Phone", "", false),
-      txt("taxId", "Tax registration number", "", false),
-      { key: "address", label: "Address", type: "textarea", required: false },
-      {
-        key: "notes",
-        label: "Relationship notes",
-        type: "textarea",
-        required: false,
-      },
-    ];
-  } else if (type === "fabric") {
-    title = "Add fabric to the library";
-    fields = [
-      txt("name", "Fabric name"),
-      txt("sku", "Unique SKU"),
-      txt("composition", "Composition", "", false),
-      txt("color", "Color"),
-      n("width", "Roll width (mm)", 1500, 100, "1"),
-      n("gsm", "Weight (GSM)", 180, 1, "1"),
-      txt("lot", "Dye lot / batch", "", false),
-      txt("location", "Storage location", "", false),
-      n("stock", "Opening stock (metres)", 0, 0, "0.001"),
-      n("reorder", "Low-stock threshold (metres)", 100, 0, "0.001"),
-      n("cost", `Cost per metre (${state.settings.currency})`),
-      n("price", `Selling price per metre (${state.settings.currency})`),
-    ];
-  } else if (type === "adjustStock") {
-    title = "Adjust fabric stock";
-    description = `${d.name} · ${meters(Number(d.stock))} on hand`;
-    fields = [
-      n(
-        "quantity",
-        "Change in metres (negative to remove)",
-        0,
-        -1000000,
-        "0.001",
-      ),
-      { key: "reason", label: "Reason for adjustment", type: "textarea" },
-    ];
-  } else if (type === "purchase") {
-    title = "Create purchase order";
-    fields = [
-      select("supplierId", "Supplier", suppliers),
-      select("fabricId", "Fabric / dye lot", fabrics),
-      n("quantity", "Quantity (metres)", 100, 0.001, "0.001"),
-      n("unitCost", `Agreed cost per metre (${state.settings.currency})`),
-      {
-        key: "dueDate",
-        label: "Expected delivery",
-        type: "date",
-        value: after(7),
-      },
-      {
-        key: "notes",
-        label: "Supplier instructions",
-        type: "textarea",
-        required: false,
-      },
-    ];
-  } else if (type === "receive") {
-    title = `Receive ${d.number}`;
-    description = "Only the received quantity is added to available stock.";
-    submit = "Confirm receipt";
-    fields = [
-      n(
-        "quantity",
-        "Received quantity (metres)",
-        (Number(d.quantity) - Number(d.received)) / 1000,
-        0.001,
-        "0.001",
-      ),
-    ];
-  } else if (type === "order") {
-    title = "Start a garment order";
-    submit = "Create order";
-    fields = [
-      txt("name", "Style / collection name"),
-      select("customerId", "Customer", customers),
-      select("fabricId", "Fabric / dye lot", fabrics),
-      choice("category", "Garment category", [
-        "Shirts",
-        "Trousers",
-        "Womenswear",
-        "Dresses",
-        "Uniforms",
-        "Other",
-      ]),
-      n("quantity", "Total pieces", 50, 1, "1"),
-      txt("sizes", "Size breakdown", "S: 10, M: 20, L: 15, XL: 5"),
-      { key: "dueDate", label: "Delivery due", type: "date", value: after(14) },
-      choice("priority", "Priority", ["Normal", "High", "Urgent"]),
-      n("unitPrice", `Selling price per piece (${state.settings.currency})`),
-      n("laborCost", `Tailoring cost per piece (${state.settings.currency})`),
-      {
-        key: "notes",
-        label: "Measurements, stitching & finishing instructions",
-        type: "textarea",
-        required: false,
-      },
-    ];
-  } else if (type === "assign") {
-    title = "Assign production";
-    description =
-      "The first assignment issues the full reserved fabric length to production.";
-    const orders = state.orders
-      .filter((o) => ["planned", "production"].includes(o.status))
-      .map((o) => ({ value: o.id, label: `${o.number} · ${o.name}` }));
-    fields = [
-      select("orderId", "Order", orders, String(d.orderId || "")),
-      select("tailorId", "Tailor", tailors),
-      n("quantity", "Assigned pieces", Number(d.quantity || 1), 1, "1"),
-      {
-        key: "dueDate",
-        label: "Tailor deadline",
-        type: "date",
-        value: String(d.dueDate || after(7)),
-      },
-      {
-        key: "notes",
-        label: "Assignment instructions",
-        type: "textarea",
-        required: false,
-      },
-    ];
-  } else if (type === "progress") {
-    title = "Update production progress";
-    description = `Enter cumulative counts, up to ${d.quantity} assigned pieces. Counts cannot decrease.`;
-    submit = "Update progress";
-    fields = [
-      n("cut", "Pieces cut", Number(d.cut), Number(d.cut), "1"),
-      n("sewn", "Pieces stitched", Number(d.sewn), Number(d.sewn), "1"),
-      n(
-        "finished",
-        "Pieces finished & checked",
-        Number(d.finished),
-        Number(d.finished),
-        "1",
-      ),
-      {
-        key: "notes",
-        label: "Progress notes / blockers",
-        type: "textarea",
-        required: false,
-      },
-    ];
-  } else if (type === "quality") {
-    title = `Quality review · ${d.number}`;
-    description = `${d.quantity} pieces submitted. Accepted pieces become sellable stock; the remainder is recorded as rejected.`;
-    submit = "Complete quality review";
-    fields = [
-      n("accepted", "Accepted pieces", Number(d.quantity), 0, "1"),
-      {
-        key: "notes",
-        label: "Inspection notes and reasons for rejection",
-        type: "textarea",
-      },
-    ];
-  } else if (type === "cancelOrder") {
-    title = `Cancel ${d.number}`;
-    description =
-      "Reserved fabric will be released. Issued production cannot be cancelled here.";
-    submit = "Cancel order";
-    fields = [{ key: "reason", label: "Reason", type: "textarea" }];
-  } else if (type === "invoice") {
+  if (type === "invoice") {
     title = "Bill & deliver";
     description =
       "Issuing this invoice also removes the selected stock. Prices and customer details are preserved on the invoice.";
@@ -498,11 +328,23 @@ export function Editor({
                       name: `${p.name} · ${p.stock - p.channelStock} pcs`,
                       price: p.price,
                     }))
-                  : state.fabrics.map((f) => ({
-                      id: f.id,
-                      name: `${f.name} · ${meters(f.stock - f.reserved)}`,
-                      price: f.price,
-                    }));
+                  : state.fabricOrders
+                      .filter((order) => !order.archived && order.receivedMetres > 0)
+                      .flatMap((order) => {
+                        const dispatched = state.transports
+                          .filter((item) => item.fabricOrderId === order.id && !["Void", "Returned"].includes(item.stage))
+                          .reduce((sum, item) => sum + item.fabricQuantity, 0);
+                        const sold = state.movements
+                          .filter((item) => item.fabricOrderId === order.id && item.type === "Direct sale")
+                          .reduce((sum, item) => sum - item.quantity / 1000, 0);
+                        const available = Math.max(0, order.receivedMetres - dispatched - sold);
+                        if (available < 0.001) return [];
+                        return [{
+                          id: order.id,
+                          name: `${order.fabricName} · ${order.poNumber} · ${available.toLocaleString("en-IN")} m available`,
+                          price: Math.round(order.pricePerMetre * 100),
+                        }];
+                      });
               return (
                 <div className="invoice-line" key={i}>
                   <Field label="Item type">

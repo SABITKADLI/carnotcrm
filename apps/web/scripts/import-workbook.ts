@@ -23,7 +23,9 @@ async function main() {
     preview.summary,
     `${preview.issues.length} issues shown`,
   );
-  const result = await commitWorkbook(preview.runId, user);
+  const result = await commitWorkbook(preview.runId, user, {
+    ignoreIncomplete: process.argv.includes("--ignore-incomplete"),
+  });
   console.log("Committed", result);
 }
 main().catch((error) => {

@@ -1,867 +1,130 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { createHmac, randomUUID } from "node:crypto";
-import { all, base, db, get, put, settings } from "../src/lib/db";
-import { createUser, login, sessionUser, startSession } from "../src/lib/auth";
+import { randomUUID } from "node:crypto";
+import { all, base, db, get, put } from "../src/lib/db";
+import { createUser } from "../src/lib/auth";
 import { execute, state } from "../src/lib/service";
-import { createPlan } from "../src/lib/cutting";
-import { processPaidWebhook, sendToShopify } from "../src/lib/shopify";
-import { resetWorkbookOperations } from "../src/lib/workbook";
-import type {
-  Contact,
-  Fabric,
-  Invoice,
-  Job,
-  Order,
-  Product,
-  Purchase,
-  User,
-  FabricOrder,
-  FabricSpec,
-  Organization,
-  Person,
-} from "../src/lib/types";
+import { retireLegacyWorkflow } from "../src/lib/legacy-retirement";
+import type { FabricOrder, FabricSpec, Invoice, Organization, User } from "../src/lib/types";
 
 process.env.CRM_DATABASE_PATH = ":memory:";
-let admin: User,
-  tailor: User,
-  other: User,
-  client: Contact,
-  supplier: Contact,
-  fabric: Fabric;
-const dueDate = "2027-01-01";
-function run<T = unknown>(
-  action: string,
-  input: Record<string, unknown>,
-  user = admin,
-  key = randomUUID(),
-) {
-  return execute(user, action, input, key) as T;
-}
-function order(quantity = 10) {
-  return run<Order>("order", {
-    name: "Linen shirt",
-    customerId: client.id,
-    fabricId: fabric.id,
-    category: "Shirts",
-    quantity,
-    sizes: "M",
-    dueDate,
-    priority: "Normal",
-    notes: "French seams",
-    unitPrice: 500,
-    laborCost: 50,
-  });
-}
-function plan(o: Order) {
-  run("plan", {
-    id: o.id,
-    pieces: [
-      { name: "Panel", width: 1000, length: 1000, count: 1, rotate: false },
-    ],
-    allowance: 0,
-    shrinkage: 0,
-    gap: 0,
-  });
-  return get("orders", o.id);
-}
-function assign(o: Order, quantity = o.quantity, person = tailor) {
-  return run<Job>("assign", {
-    orderId: o.id,
-    tailorId: person.id,
-    quantity,
-    dueDate,
-    notes: "",
-  });
-}
-function complete(o: Order, accepted = o.quantity) {
-  const j = assign(plan(o));
-  run(
-    "progress",
-    {
-      id: j.id,
-      cut: j.quantity,
-      sewn: j.quantity,
-      finished: j.quantity,
-      notes: "Done",
-    },
-    tailor,
-  );
-  run("quality", { id: o.id, accepted, notes: "Checked" });
-  return all("products").find((p) => p.orderId === o.id)!;
-}
-function bill(
-  item: Fabric | Product,
-  kind: "fabric" | "product",
-  quantity: number,
-  overrides = {},
-) {
-  return run<Invoice>("invoice", {
-    customerId: client.id,
-    lines: [{ kind, itemId: item.id, quantity, price: 500 }],
-    discount: 0,
-    taxRate: 10,
-    dueDate,
-    notes: "",
-    ...overrides,
-  });
-}
+let admin: User;
+const run = <T = unknown>(action: string, input: Record<string, unknown>, user = admin, key = randomUUID()) =>
+  execute(user, action, input, key) as T;
+const partner = (name: string, role: "supplier" | "distributor" | "jobworker" | "transporter") =>
+  run<Organization>("organization", { name, roles: [role] });
+const spec = (supplierId: string) => put("fabricSpecs", {
+  ...base("fs"), version: 1, name: "Oxford", rangeName: "Core", width: "58",
+  folding: "Open", weave: "Plain", threadCount: "40s", construction: "120x80",
+  content: "Cotton", supplierId,
+} satisfies FabricSpec);
+const po = (fabricSpecId: string, partyId: string) => run<FabricOrder>("fabricOrder", {
+  fabricSpecId, orderDate: "2026-09-01", deliveryDate: "2026-09-15",
+  fabricType: "Shirting", pricePerMetre: 120, quantityOrdered: 100,
+  designs: "1", colors: "2", partyIds: [partyId], fabricFor: "Garment",
+});
+const bill = (customerId: string, kind: "fabric" | "product", itemId: string, quantity: number) =>
+  run<Invoice>("invoice", { customerId, lines: [{ kind, itemId, quantity, price: 200 }],
+    discount: 0, taxRate: 0, dueDate: "2026-10-01", notes: "" });
+
 beforeEach(() => {
-  db().exec(
-    "DELETE FROM sessions; DELETE FROM users; DELETE FROM entities; DELETE FROM settings; DELETE FROM operations; DELETE FROM login_attempts;",
-  );
-  admin = createUser(
-    "Admin",
-    "admin@test.example",
-    "long-test-password",
-    "admin",
-  );
-  tailor = createUser(
-    "Tailor",
-    "tailor@test.example",
-    "long-test-password",
-    "tailor",
-  );
-  other = createUser(
-    "Other",
-    "other@test.example",
-    "long-test-password",
-    "tailor",
-  );
-  client = run<Contact>("contact", {
-    type: "customer",
-    name: "Client",
-    email: "client@example.com",
-  });
-  supplier = run<Contact>("contact", { type: "supplier", name: "Mill" });
-  fabric = run<Fabric>("fabric", {
-    name: "Linen",
-    sku: "LIN-01",
-    composition: "Linen",
-    color: "Oat",
-    width: 1000,
-    gsm: 180,
-    stock: 100,
-    reorder: 10,
-    cost: 100,
-    price: 200,
-  });
+  db().exec("DELETE FROM sessions; DELETE FROM users; DELETE FROM entities; DELETE FROM settings; DELETE FROM operations; DELETE FROM login_attempts;");
+  admin = createUser("Admin", "admin@test.example", "long-test-password", "admin");
 });
 
-test("partner accounts must link to the matching organization or person", () => {
-  const supplierOrganization = put("organizations", {
-    ...base("org"),
-    version: 1,
-    name: "Portal Mill",
-    roles: ["supplier"],
-    email: "",
-    phone: "",
-    address: "",
-    taxId: "",
-    notes: "",
-  } satisfies Organization);
-  const jobworkerOrganization = put("organizations", {
-    ...base("org"),
-    version: 1,
-    name: "Portal Factory",
-    roles: ["jobworker"],
-    email: "",
-    phone: "",
-    address: "",
-    taxId: "",
-    notes: "",
-  } satisfies Organization);
-  const driver = put("people", {
-    ...base("person"),
-    version: 1,
-    name: "Portal Driver",
-    role: "delivery",
-    email: "",
-    phone: "",
-    notes: "",
-  } satisfies Person);
-
-  assert.throws(
-    () =>
-      run("user", {
-        name: "Wrong Delivery",
-        email: "wrong-delivery@example.com",
-        password: "long-test-password",
-        role: "delivery",
-        partnerId: supplierOrganization.id,
-      }),
-    /must link to a driver, pickup, or delivery person/,
-  );
-  assert.throws(
-    () =>
-      run("user", {
-        name: "Wrong Factory",
-        email: "wrong-factory@example.com",
-        password: "long-test-password",
-        role: "jobworker",
-        partnerId: supplierOrganization.id,
-      }),
-    /marked as jobworker/,
-  );
-
-  const delivery = run<User>("user", {
-    name: "Delivery User",
-    email: "delivery@example.com",
-    password: "long-test-password",
-    role: "delivery",
-    partnerId: driver.id,
-  });
-  const jobworker = run<User>("user", {
-    name: "Factory User",
-    email: "factory@example.com",
-    password: "long-test-password",
-    role: "jobworker",
-    partnerId: jobworkerOrganization.id,
-  });
-  assert.equal(delivery.partnerId, driver.id);
-  assert.equal(jobworker.partnerId, jobworkerOrganization.id);
-});
-
-test("partial purchasing receipt changes stock exactly once on retry", () => {
-  const po = run<Purchase>("purchase", {
-    supplierId: supplier.id,
-    fabricId: fabric.id,
-    quantity: 50,
-    unitCost: 200,
-    dueDate,
-  });
-  const input = { id: po.id, quantity: 20 },
-    key = randomUUID();
-  run("receive", input, admin, key);
-  run("receive", input, admin, key);
-  assert.equal(get("fabrics", fabric.id).stock, 120000);
-  assert.equal(get("purchases", po.id).received, 20000);
-  assert.equal(get("purchases", po.id).status, "partial");
-  assert.throws(() => run("receive", { id: po.id, quantity: 31 }), /exceeds/);
-  assert.equal(get("fabrics", fabric.id).stock, 120000);
-});
-test("fabric PO status, receipts, and linked delivery challans reconcile quantities", () => {
-  const partner = (
-    name: string,
-    role: "supplier" | "distributor" | "jobworker" | "transporter",
-  ) => run<Organization>("organization", { name, roles: [role] });
-  const mill = partner("Mill One", "supplier");
-  const party = partner("Party One", "distributor");
-  const maker = partner("Maker One", "jobworker");
-  const carrier = partner("Carrier One", "transporter");
-  const spec = put("fabricSpecs", {
-    id: "fs_test",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    version: 1,
-    name: "Oxford",
-    rangeName: "Classic",
-    width: "58",
-    folding: "Open",
-    weave: "Plain",
-    threadCount: "40s",
-    construction: "120x80",
-    content: "Cotton",
-    supplierId: mill.id,
-  } satisfies FabricSpec);
-  const po = run<FabricOrder>("fabricOrder", {
-    fabricSpecId: spec.id,
-    orderDate: "2026-09-01",
-    deliveryDate: "2026-09-20",
-    fabricType: "Shirting",
-    pricePerMetre: 100,
-    quantityOrdered: 100,
-    designs: "2",
-    colors: "4",
-    partyIds: [party.id],
-    fabricFor: "Garment",
-  });
-  run("fabricReceipt", {
-    fabricOrderId: po.id,
-    receiptDate: "2026-09-10",
-    quantityMetres: 40,
-    warehouse: carrier.name,
-    lrNumber: "LR-42",
-    transporterId: carrier.id,
-    numberOfBales: 2,
-    partyId: party.id,
-    jobworkerId: maker.id,
-    pickedBy: "Driver A",
-  });
-  assert.equal(get("fabricOrders", po.id).status, "Partial");
-  assert.equal(get("fabricOrders", po.id).receivedMetres, 40);
-  assert.equal(all("challans").length, 1);
-  assert.equal(all("transports")[0].lrNumber, "LR-42");
-  assert.equal(all("fabricReceipts")[0].warehouse, "Carrier One");
-  assert.equal(all("fabricReceipts")[0].transportName, "Carrier One");
-  assert.throws(
-    () => run("fabricOrderStatus", { id: po.id, status: "Ordered" }),
-    /must be Partial or Received/,
-  );
-  run("fabricOrderStatus", {
-    id: po.id,
-    status: "Cancelled",
-    cancelledMetres: 60,
-  });
-  assert.equal(get("fabricOrders", po.id).cancelledMetres, 60);
-});
-test("workbook reset backs up and clears operations while preserving access", async () => {
-  const mill = run<Organization>("organization", {
-    name: "Reset Mill",
-    roles: ["supplier"],
-  });
-  const spec = put("fabricSpecs", {
-    ...base("fs"),
-    version: 1,
-    name: "Reset Oxford",
-    rangeName: "",
-    width: "58",
-    folding: "Open",
-    weave: "Plain",
-    threadCount: "",
-    construction: "",
-    content: "Cotton",
-    supplierId: mill.id,
-  } satisfies FabricSpec);
-  run<FabricOrder>("fabricOrder", {
-    fabricSpecId: spec.id,
-    orderDate: "2026-10-12",
-    deliveryDate: "2026-10-30",
-    fabricType: "Shirting",
-    pricePerMetre: 100,
-    quantityOrdered: 50,
-    designs: "1",
-    colors: "1",
-    newPartyName: "Reset Party",
-    fabricFor: "Garment",
-  });
-
-  const result = await resetWorkbookOperations(admin);
-
-  assert.equal(result.success, true);
-  assert.equal(all("fabricOrders").length, 0);
-  assert.equal(all("fabricSpecs").length, 0);
-  assert.equal(all("organizations").length, 0);
-  assert.equal(all("operationalBackups").length, 1);
-  assert.ok(sessionUser(startSession(admin.id)));
-  assert.equal(settings().portalName, "Carnot CRM");
-});
-test("partner master accepts coolies and manual PO entry creates reusable master data", () => {
-  const coolie = run<Organization>("organization", {
-    name: "Warehouse Coolie One",
-    roles: ["coolie"],
-    phone: "9999999999",
-  });
-  assert.deepEqual(coolie.roles, ["coolie"]);
-
-  const po = run<FabricOrder>("fabricOrder", {
-    fabricSpecId: "__new__",
-    fabricName: "Manual Poplin",
-    internalItemName: "Summer Range",
-    width: "58",
-    folding: "Open",
-    content: "100% Cotton",
-    weave: "Plain",
-    construction: "120x80",
-    threadCount: "40s",
-    supplierId: "__new__",
-    newSupplierName: "Manual Mill",
-    agentId: "__new__",
-    newAgentName: "Manual Agent",
-    newPartyName: "Manual Party",
-    orderDate: "2026-10-12",
-    deliveryDate: "2026-10-30",
-    fabricType: "Shirting",
-    pricePerMetre: 135,
-    quantityOrdered: 80,
-    designs: "2",
-    colors: "3",
-    fabricFor: "Garment",
-  });
-  assert.equal(po.fabricName, "Manual Poplin");
-  assert.equal(po.supplierName, "Manual Mill");
-  assert.equal(po.agentName, "Manual Agent");
-  assert.equal(po.purposeParty, "Manual Party");
-  assert.ok(all("fabricSpecs").some((item) => item.name === "Manual Poplin"));
-  assert.ok(
-    all("organizations").some(
-      (item) =>
-        item.name === "Manual Party" && item.roles.includes("distributor"),
-    ),
-  );
-});
-test("operational workflow crosses PO, transport, production, cleared lots, finished goods, and billing", () => {
-  const partner = (
-    name: string,
-    role: "supplier" | "distributor" | "jobworker" | "transporter",
-  ) => run<Organization>("organization", { name, roles: [role] });
-  const mill = partner("Workflow Mill", "supplier"),
-    party = partner("Workflow Party", "distributor"),
-    maker = partner("Workflow Maker", "jobworker"),
-    carrier = partner("Workflow Carrier", "transporter");
-  const now = new Date().toISOString();
-  const spec = put("fabricSpecs", {
-    id: "fs_full_workflow",
-    createdAt: now,
-    updatedAt: now,
-    version: 1,
-    name: "Workflow Oxford",
-    rangeName: "Core",
-    width: "58",
-    folding: "Open",
-    weave: "Plain",
-    threadCount: "40s",
-    construction: "120x80",
-    content: "Cotton",
-    supplierId: mill.id,
-  } satisfies FabricSpec);
-  const brand = put("brands", {
-    id: "brand_workflow",
-    createdAt: now,
-    updatedAt: now,
-    version: 1,
-    name: "Workflow Brand",
-  });
-  ["Cutting Completed", "Goods Ready"].forEach((value, sortOrder) =>
-    put("referenceValues", {
-      id: `ref_workflow_${sortOrder}`,
-      createdAt: now,
-      updatedAt: now,
-      version: 1,
-      category: "production_status",
-      value,
-      active: true,
-      sortOrder,
-    }),
-  );
-  const po = run<FabricOrder>("fabricOrder", {
-    fabricSpecId: spec.id,
-    orderDate: "2026-09-01",
-    deliveryDate: "2026-09-15",
-    fabricType: "Shirting",
-    pricePerMetre: 120,
-    quantityOrdered: 100,
-    designs: "1",
-    colors: "2",
-    partyIds: [party.id],
-    fabricFor: "Garment",
-  });
-  run("fabricReceipt", {
-    fabricOrderId: po.id,
-    receiptDate: "2026-09-10",
-    dispatchDate: "2026-09-11",
-    quantityMetres: 100,
-    warehouse: "Singal Fabrics",
-    lrNumber: "LR-FLOW-1",
-    lrDate: "2026-09-10",
-    transporterId: carrier.id,
-    numberOfBales: 2,
-    partyId: party.id,
-    jobworkerId: maker.id,
-    pickedBy: "Workflow Driver",
-  });
-  const challan = all("challans")[0];
-  run("challanStatus", { id: challan.id, status: "Picked Up" });
-  run("challanStatus", { id: challan.id, status: "Delivered" });
-  run("challanStatus", { id: challan.id, status: "Acknowledged" });
-  const workOrder = run<{ id: string }>("workOrder", {
-    challanId: challan.id,
-    brandId: brand.id,
-    itemName: "Oxford shirt",
-    bodyFabric: 100,
-    trimFabric: 0,
-    issuedDate: "2026-09-11",
-  });
-  const productionData = {
-    id: workOrder.id,
-    approvedConsumption: 2,
-    ratio: { M: 1 },
-    cutting: { M: 50 },
-    cuttingDate: "2026-09-12",
-    productionRemarks: "Workflow test",
-  };
-  run("productionUpdate", {
-    ...productionData,
-    status: "Cutting Completed",
-  });
-  run("productionUpdate", {
-    ...productionData,
-    status: "Goods Ready",
-    actualGoodsReadyDate: "2026-09-20",
-    fiDone: true,
-  });
-  run("productionInward", {
-    workOrderId: workOrder.id,
-    inwardDate: "2026-09-21",
-    setwiseQuantity: 48,
-    mixPiecesQuantity: 0,
-    damagePiecesQuantity: 2,
-    remarks: "Two damaged pieces",
-  });
-
-  assert.equal(get("fabricOrders", po.id).status, "Received");
-  assert.equal(get("challans", challan.id).status, "Acknowledged");
-  assert.equal(get("workOrders", workOrder.id).status, "Cleared");
-  assert.equal(get("workOrders", workOrder.id).archived, true);
-  assert.equal(all("inwards")[0].totalInward, 50);
-  const finishedProduct = all("products").find(
-    (item) => item.orderId === workOrder.id,
-  )!;
-  assert.equal(finishedProduct.stock, 48);
-  const invoice = bill(finishedProduct, "product", 10);
-  assert.equal(invoice.lines[0].quantity, 10);
-  assert.equal(get("products", finishedProduct.id).stock, 38);
-  assert.ok(
-    all("movements").some(
-      (item) => item.type === "Garment inward" && item.quantity === 48,
-    ),
-  );
-});
-test("reserved fabric cannot be sold and cancellation releases it", () => {
-  const o = plan(order(95));
-  assert.equal(get("fabrics", fabric.id).reserved, 95000);
-  assert.throws(() => bill(fabric, "fabric", 6), /insufficient/);
-  assert.equal(all("invoices").length, 0);
-  run("cancelOrder", { id: o.id, reason: "Customer cancelled" });
-  assert.equal(get("fabrics", fabric.id).reserved, 0);
-  assert.equal(get("orders", o.id).status, "cancelled");
-});
-test("competing reservations cannot overbook the remaining material", () => {
-  plan(order(60));
-  const next = order(50);
-  assert.throws(() => plan(next), /Insufficient fabric/);
-  assert.equal(get("fabrics", fabric.id).reserved, 60000);
-  assert.equal(get("orders", next.id).status, "draft");
-});
-test("cutting enforces grain direction, physical dimensions and shrinkage", () => {
-  assert.throws(
-    () =>
-      createPlan(
-        1000,
-        1,
-        [{ name: "Wide", width: 1100, length: 500, count: 1, rotate: false }],
-        0,
-      ),
-    /does not fit/,
-  );
-  const rotated = createPlan(
-    1000,
-    1,
-    [{ name: "Wide", width: 1100, length: 500, count: 1, rotate: true }],
-    0,
-  );
-  assert.equal(rotated.placements[0].rotated, true);
-  const shrink = createPlan(
-    2000,
-    1,
-    [{ name: "Panel", width: 1000, length: 1000, count: 1, rotate: false }],
-    0,
-    20,
-    0,
-  );
-  assert.equal(shrink.placements[0].width, 1250);
-  assert.equal(shrink.length, 1250);
-  assert.throws(
-    () =>
-      createPlan(1500, 5000, [
-        { name: "Panel", width: 100, length: 100, count: 100, rotate: true },
-      ]),
-    /20,000/,
-  );
-});
-test("marker rectangles stay within roll bounds and never overlap", () => {
-  const p = createPlan(1500, 8, [
-    { name: "A", width: 520, length: 780, count: 2, rotate: false },
-    { name: "B", width: 250, length: 480, count: 2, rotate: true },
-  ]);
-  for (const a of p.placements) {
-    assert.ok(a.x >= p.allowance && a.x + a.width <= p.width - p.allowance);
-    assert.ok(a.y + a.length <= p.length);
-  }
-  for (let i = 0; i < p.placements.length; i++)
-    for (let j = i + 1; j < p.placements.length; j++) {
-      const a = p.placements[i],
-        b = p.placements[j];
-      assert.ok(
-        a.x + a.width <= b.x ||
-          b.x + b.width <= a.x ||
-          a.y + a.length <= b.y ||
-          b.y + b.length <= a.y,
-      );
-    }
-});
-test("split assignments issue fabric once and forbid over-allocation", () => {
-  const o = plan(order());
-  assign(o, 6);
-  assign(o, 4, other);
-  assert.equal(get("fabrics", fabric.id).stock, 90000);
-  assert.equal(get("fabrics", fabric.id).reserved, 0);
-  assert.equal(
-    all("movements").filter((m) => m.type === "Production issue").length,
-    1,
-  );
-  assert.throws(() => assign(o, 1), /exceed/);
-  assert.throws(
-    () => run("cancelOrder", { id: o.id, reason: "Late cancellation" }),
-    /cannot be cancelled/,
-  );
-});
-test("tailor can only read and update own jobs and cannot perform admin operations", () => {
-  const o = plan(order()),
-    own = assign(o, 5),
-    foreign = assign(o, 5, other);
-  const visible = state(tailor);
-  assert.equal(visible.jobs.length, 1);
-  assert.equal(visible.jobs[0].id, own.id);
-  assert.equal(visible.fabrics.length, 0);
-  assert.equal(visible.orders[0].unitPrice, 0);
-  assert.equal(visible.orders[0].issuedCost, 0);
-  assert.throws(
-    () =>
-      run("progress", { id: foreign.id, cut: 1, sewn: 0, finished: 0 }, tailor),
-    /own assignments/,
-  );
-  assert.throws(() => run("invoice", {}, tailor), /Administrator/);
-});
-test("production counts are cumulative, bounded and ordered", () => {
-  const j = assign(plan(order()));
-  run("progress", { id: j.id, cut: 5, sewn: 4, finished: 2 }, tailor);
-  assert.throws(() =>
-    run("progress", { id: j.id, cut: 4, sewn: 4, finished: 2 }, tailor),
-  );
-  assert.throws(() =>
-    run("progress", { id: j.id, cut: 10, sewn: 7, finished: 8 }, tailor),
-  );
-  assert.throws(() =>
-    run("progress", { id: j.id, cut: 11, sewn: 7, finished: 7 }, tailor),
-  );
-  assert.equal(get("jobs", j.id).finished, 2);
-});
-test("QC adds only accepted stock once and preserves material issue cost", () => {
-  const o = plan(order()),
-    j = assign(o);
-  assert.throws(
-    () => run("quality", { id: o.id, accepted: 8, notes: "Check" }),
-    /submitted/,
-  );
-  const po = run<Purchase>("purchase", {
-    supplierId: supplier.id,
-    fabricId: fabric.id,
-    quantity: 100,
-    unitCost: 300,
-    dueDate,
-  });
-  run("receive", { id: po.id, quantity: 100 });
-  run("progress", { id: j.id, cut: 10, sewn: 10, finished: 10 }, tailor);
-  const key = randomUUID(),
-    input = { id: o.id, accepted: 8, notes: "Two fabric defects" };
-  run("quality", input, admin, key);
-  run("quality", input, admin, key);
-  const p = all("products")[0];
-  assert.equal(p.stock, 8);
-  assert.equal(p.cost, 18750);
-  assert.equal(get("orders", o.id).rejected, 2);
-  assert.throws(() => run("quality", input), /submitted/);
-  assert.equal(all("products").length, 1);
-});
-test("invalid invoices roll back stock and invoice retry is idempotent", () => {
-  assert.throws(
-    () => bill(fabric, "fabric", 10, { discount: 999999 }),
-    /Discount/,
-  );
-  assert.equal(get("fabrics", fabric.id).stock, 100000);
-  const input = {
-    customerId: client.id,
-    lines: [{ kind: "fabric", itemId: fabric.id, quantity: 2.5, price: 200 }],
-    discount: 0,
-    taxRate: 10,
-    dueDate,
-  };
-  const key = randomUUID();
-  const inv = run<Invoice>("invoice", input, admin, key);
-  run("invoice", input, admin, key);
+test("billing uses the same Customer/Party organization as a fabric PO", () => {
+  const mill = partner("Mill", "supplier");
+  const customer = partner("Customer Party", "distributor");
+  const order = po(spec(mill.id).id, customer.id);
+  run("fabricReceipt", { fabricOrderId: order.id, receiptDate: "2026-09-10",
+    quantityMetres: 60, warehouse: "Main warehouse" });
+  const invoice = bill(customer.id, "fabric", order.id, 20);
+  assert.equal(invoice.customerId, customer.id);
+  assert.equal(invoice.customerName, customer.name);
+  assert.match(invoice.lines[0].description, new RegExp(order.poNumber.replace("/", "\\/")));
+  assert.equal(invoice.lines[0].quantity, 20);
+  assert.equal(all("movements").find((item) => item.reference === invoice.number)?.fabricOrderId, order.id);
+  assert.throws(() => bill(customer.id, "fabric", order.id, 41), /insufficient received fabric/);
   assert.equal(all("invoices").length, 1);
-  assert.equal(get("fabrics", fabric.id).stock, 97500);
-  assert.equal(inv.total, 55000);
-  put("fabrics", { ...get("fabrics", fabric.id), price: 99999 });
-  assert.equal(get("invoices", inv.id).lines[0].price, 20000);
-});
-test("partial payment, full payment and overpayment safeguards", () => {
-  const inv = bill(fabric, "fabric", 1);
-  const input = {
-      invoiceId: inv.id,
-      amount: 200,
-      method: "UPI",
-      reference: "PAY-1",
-      date: "2026-09-17",
-    },
-    key = randomUUID();
-  run("payment", input, admin, key);
-  run("payment", input, admin, key);
-  assert.equal(get("invoices", inv.id).paid, 20000);
-  assert.throws(() => run("payment", { ...input, amount: 351 }), /outstanding/);
-  run("payment", { ...input, amount: 350, reference: "PAY-2" });
-  assert.equal(get("invoices", inv.id).status, "paid");
-});
-test("Shopify allocated units cannot be sold directly", () => {
-  const p = complete(order());
-  put("products", { ...p, channelStock: 8 });
-  assert.throws(() => bill(p, "product", 3), /Shopify allocation/);
-  bill(p, "product", 2);
-  assert.equal(get("products", p.id).stock, 8);
-});
-test("authentication invalidation, brute-force limits and secret-free operation storage", () => {
-  const token = login("TAILOR@test.example", "long-test-password");
-  assert.equal(sessionUser(token)?.id, tailor.id);
-  run("userStatus", { id: tailor.id, active: false });
-  assert.equal(sessionUser(token), null);
-  for (let i = 0; i < 8; i++)
-    assert.throws(() => login("admin@test.example", "wrong"), /incorrect/);
-  assert.throws(
-    () => login("admin@test.example", "long-test-password"),
-    /Too many/,
-  );
-  const password = "another-long-test-password";
-  run("user", {
-    name: "New",
-    email: "new@test.example",
-    role: "tailor",
-    password,
-  });
-  assert.ok(
-    !JSON.stringify(db().prepare("SELECT * FROM operations").all()).includes(
-      password,
-    ),
-  );
-  assert.equal(sessionUser(startSession(admin.id))?.id, admin.id);
-});
-test("currency cannot relabel existing monetary records and operation keys cannot be reused", () => {
-  assert.throws(
-    () => run("settings", { ...settings(), currency: "USD" }),
-    /Currency cannot/,
-  );
-  const key = randomUUID();
-  run("contact", { name: "A", type: "customer" }, admin, key);
-  assert.throws(
-    () => run("contact", { name: "B", type: "customer" }, admin, key),
-    /different request/,
-  );
-});
-test("paid webhook authenticates, retains large IDs and deduplicates an order", () => {
-  const p = complete(order());
-  const variant = "9876543210987654321";
-  put("products", {
-    ...p,
-    channelStock: 6,
-    variantId: `gid://shopify/ProductVariant/${variant}`,
-  });
-  process.env.SHOPIFY_WEBHOOK_SECRET = "test-secret";
-  process.env.SHOPIFY_SHOP = "test.myshopify.com";
-  const raw = Buffer.from(
-    `{"admin_graphql_api_id":"gid://shopify/Order/123","name":"#1001","currency":"INR","line_items":[{"variant_id":${variant},"quantity":2,"price":"500.00"}]}`,
-  );
-  const headers = new Headers({
-    "x-shopify-hmac-sha256": createHmac("sha256", "test-secret")
-      .update(raw)
-      .digest("base64"),
-    "x-shopify-shop-domain": "test.myshopify.com",
-    "x-shopify-topic": "orders/paid",
-  });
-  processPaidWebhook(raw, headers);
-  processPaidWebhook(raw, headers);
-  assert.equal(get("products", p.id).stock, 8);
-  assert.equal(get("products", p.id).channelStock, 4);
-  assert.equal(
-    all("movements").filter((m) => m.type === "Shopify sale").length,
-    1,
-  );
-  headers.set("x-shopify-hmac-sha256", "bad");
-  assert.throws(() => processPaidWebhook(raw, headers), /signature/);
-});
-test("Shopify partial failure preserves remote IDs and resumes without duplicate product creation", async () => {
-  const p = complete(order());
-  process.env.SHOPIFY_SHOP = "test.myshopify.com";
-  process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = "test-token";
-  const original = global.fetch;
-  let creates = 0,
-    fail = true;
-  global.fetch = async (_url, options) => {
-    const { query } = JSON.parse(String(options?.body));
-    let data;
-    if (query.includes("StoreCurrency"))
-      data = { shop: { currencyCode: "INR" } };
-    else if (query.includes("FindProduct"))
-      data = { productByIdentifier: null };
-    else if (query.includes("CreateProduct")) {
-      creates++;
-      data = {
-        productCreate: {
-          product: {
-            id: "gid://shopify/Product/1",
-            variants: {
-              nodes: [
-                {
-                  id: "gid://shopify/ProductVariant/2",
-                  inventoryItem: { id: "gid://shopify/InventoryItem/3" },
-                },
-              ],
-            },
-          },
-          userErrors: [],
-        },
-      };
-    } else {
-      if (fail) return new Response("", { status: 503 });
-      data = { productVariantsBulkUpdate: { userErrors: [] } };
-    }
-    return Response.json({ data });
-  };
-  try {
-    await assert.rejects(sendToShopify(admin, p.id, false, 0), /503/);
-    assert.equal(get("products", p.id).shopifyId, "gid://shopify/Product/1");
-    fail = false;
-    await sendToShopify(admin, p.id, false, 0);
-    assert.equal(creates, 1);
-    assert.equal(get("products", p.id).shopifyStatus, "draft");
-  } finally {
-    global.fetch = original;
-  }
 });
 
-test("a depleted Shopify allocation is not reserved again on publication retry", async () => {
-  const p = complete(order());
-  put("products", {
-    ...p,
-    stock: 5,
-    channelStock: 0,
-    shopifyId: "gid://shopify/Product/1",
-    variantId: "gid://shopify/ProductVariant/2",
-    inventoryItemId: "gid://shopify/InventoryItem/3",
-    allocationKey: "original-allocation",
-    inventorySynced: true,
-    shopifyStatus: "error",
-  });
-  process.env.SHOPIFY_SHOP = "test.myshopify.com";
-  process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = "test-token";
-  process.env.SHOPIFY_PUBLICATION_ID = "gid://shopify/Publication/4";
-  process.env.SHOPIFY_LOCATION_ID = "gid://shopify/Location/5";
-  const original = global.fetch;
-  global.fetch = async (_url, options) => {
-    const { query } = JSON.parse(String(options?.body));
-    assert.ok(!query.includes("SetInventory"));
-    return Response.json({
-      data: query.includes("StoreCurrency")
-        ? { shop: { currencyCode: "INR" } }
-        : { mutation: { userErrors: [] } },
-    });
-  };
-  try {
-    await sendToShopify(admin, p.id, true, 5);
-    const updated = get("products", p.id);
-    assert.equal(updated.channelStock, 0);
-    assert.equal(updated.allocationKey, "original-allocation");
-    assert.equal(updated.shopifyStatus, "published");
-  } finally {
-    global.fetch = original;
-  }
+test("a new challan reuses or creates a linked driver and limits delivery access", () => {
+  const mill = partner("Driver Mill", "supplier"), customer = partner("Driver Party", "distributor");
+  const maker = partner("Driver Maker", "jobworker"), carrier = partner("Driver Carrier", "transporter");
+  const order = po(spec(mill.id).id, customer.id);
+  run("fabricReceipt", { fabricOrderId: order.id, receiptDate: "2026-09-10", quantityMetres: 100, warehouse: "Main" });
+  const input = { fabricOrderId: order.id, partyId: customer.id, jobworkerId: maker.id,
+    transporterId: carrier.id, fabricQuantity: 25, numberOfBales: 1,
+    pickedBy: "Hari Driver", driverPhone: "9999999999", dcIssueDate: "2026-09-11" };
+  const challan = run<{ id: string; driverPersonId: string; driverName: string }>("transport", input);
+  const driver = get("people", challan.driverPersonId);
+  assert.equal(driver.organizationId, carrier.id);
+  assert.equal(driver.phone, "9999999999");
+  assert.equal(all("transports")[0].pickedByPersonId, driver.id);
+  assert.equal(challan.driverName, driver.name);
+  run("transport", { ...input, fabricQuantity: 10 });
+  assert.equal(all("people").filter((person) => person.name === driver.name).length, 1);
+  const delivery = run<User>("user", { name: driver.name, email: "driver@test.example",
+    password: "long-test-password", role: "delivery", partnerId: driver.id });
+  assert.equal(state(delivery).challans.length, 2);
+  assert.equal(state(delivery).invoices.length, 0);
+  assert.throws(() => run("transport", { ...input, fabricQuantity: 66 }), /dispatch exceeds received fabric/);
+});
+
+test("PO to receipt to challan to production to inward to finished sale", () => {
+  const mill = partner("Workflow Mill", "supplier"), customer = partner("Workflow Party", "distributor");
+  const maker = partner("Workflow Maker", "jobworker"), carrier = partner("Workflow Carrier", "transporter");
+  const order = po(spec(mill.id).id, customer.id);
+  const brand = put("brands", { ...base("brand"), version: 1, name: "Carnot" });
+  for (const [index, value] of ["Cutting Completed", "Goods Ready"].entries())
+    put("referenceValues", { ...base("ref"), version: 1, category: "production_status",
+      value, active: true, sortOrder: index });
+  run("fabricReceipt", { fabricOrderId: order.id, receiptDate: "2026-09-10",
+    quantityMetres: 100, warehouse: "Main", transporterId: carrier.id,
+    partyId: customer.id, jobworkerId: maker.id, pickedBy: "Workflow Driver",
+    dispatchDate: "2026-09-11", numberOfBales: 2 });
+  const challan = all("challans")[0];
+  assert.ok(challan.driverPersonId);
+  for (const status of ["Picked Up", "Delivered", "Acknowledged"])
+    run("challanStatus", { id: challan.id, status });
+  const work = run<{ id: string }>("workOrder", { challanId: challan.id,
+    brandId: brand.id, itemName: "Oxford shirt", bodyFabric: 100,
+    trimFabric: 0, issuedDate: "2026-09-11" });
+  const update = { id: work.id, approvedConsumption: 2, ratio: { M: 1 },
+    cutting: { M: 50 }, cuttingDate: "2026-09-12" };
+  run("productionUpdate", { ...update, status: "Cutting Completed" });
+  run("productionUpdate", { ...update, status: "Goods Ready",
+    actualGoodsReadyDate: "2026-09-20", fiDone: true });
+  run("productionInward", { workOrderId: work.id, inwardDate: "2026-09-21",
+    setwiseQuantity: 48, mixPiecesQuantity: 0, damagePiecesQuantity: 2 });
+  assert.equal(get("workOrders", work.id).status, "Cleared");
+  assert.equal(all("inwards")[0].totalInward, 50);
+  const product = all("products").find((item) => item.orderId === work.id)!;
+  assert.equal(product.stock, 48);
+  const invoice = bill(customer.id, "product", product.id, 10);
+  assert.equal(invoice.customerId, customer.id);
+  assert.equal(get("products", product.id).stock, 38);
+});
+
+test("legacy garment actions and routes are retired", () => {
+  for (const action of ["order", "plan", "assign", "progress", "quality", "purchase", "fabric", "contact"])
+    assert.throws(() => run(action, {}), /older workflow has been retired/);
+  assert.deepEqual(state(admin).orders, []);
+  assert.deepEqual(state(admin).jobs, []);
+});
+
+test("legacy data is backed up, customers are linked, and old records are removed", async () => {
+  const oldCustomer = put("contacts", { ...base("ct"), name: "Old Party", type: "customer",
+    email: "", phone: "", address: "", taxId: "", notes: "" });
+  put("orders", { ...base("ord"), number: "CO-1", name: "Old shirt", customerId: oldCustomer.id,
+    fabricId: "", category: "Shirts", quantity: 1, sizes: "M", dueDate: "2026-10-01",
+    priority: "Normal", notes: "", unitPrice: 0, laborCost: 0, status: "draft",
+    issued: 0, accepted: 0, rejected: 0 });
+  const result = await retireLegacyWorkflow();
+  assert.equal(result.retired, true);
+  assert.equal(all("contacts").length, 0);
+  assert.equal(all("orders").length, 0);
+  assert.equal(all("operationalBackups").length, 1);
+  assert.ok(all("organizations").some((item) => item.name === "Old Party" && item.roles.includes("customer")));
+  assert.equal((await retireLegacyWorkflow()).retired, false);
 });

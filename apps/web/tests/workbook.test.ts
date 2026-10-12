@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { parseWorkbook } from "../src/lib/workbook";
+import { parseWorkbook, previewWorkbook, repairWorkbookPreview, commitWorkbook } from "../src/lib/workbook";
+import { all, db } from "../src/lib/db";
+import { createUser } from "../src/lib/auth";
 
 test("workbook parser maps source columns, dates, calculated values and inward discrepancies", async () => {
   const workbook = new ExcelJS.Workbook();
@@ -247,4 +249,45 @@ test("workbook parser maps source columns, dates, calculated values and inward d
     true,
   );
   assert.ok(!parsed.issues.some((issue) => issue.message.includes("#DIV/0!")));
+});
+
+test("workbook preview repairs missing fields or requires an explicit skip", async () => {
+  process.env.CRM_DATABASE_PATH = ":memory:";
+  db().exec("DELETE FROM sessions; DELETE FROM users; DELETE FROM entities; DELETE FROM settings; DELETE FROM operations; DELETE FROM login_attempts;");
+  const admin = createUser("Workbook Admin", "workbook@test.example", "long-test-password", "admin");
+  const workbook = new ExcelJS.Workbook();
+  const master = workbook.addWorksheet("MASTER DATA");
+  master.addRow(["MASTER DATA"]);
+  master.addRow([]);
+  master.addRow(["Oxford", "", 58, "Open", "", "", "", "Cotton", "Mill"]);
+  const orders = workbook.addWorksheet("FABRIC ORDERS");
+  orders.addRow(["FABRIC ORDERS"]);
+  orders.addRow([]);
+  const row = Array(21).fill("");
+  row[0] = "Admin";
+  row[1] = new Date("2026-04-03");
+  row[4] = "Oxford";
+  row[5] = "Mill";
+  row[16] = "One";
+  row[17] = "Two";
+  row[18] = 100;
+  row[19] = "Party";
+  row[20] = "Garment";
+  orders.addRow(row);
+  for (const name of ["TRANSPORT", "PRODUCTION", "CLEARED LOTS", "DASHBOARD"])
+    workbook.addWorksheet(name);
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const first = await previewWorkbook(buffer, "missing-price.xlsx", admin);
+  assert.ok(first.issues.some((issue) => issue.code === "REQUIRED_FIELD" && issue.message.includes("Price")));
+  assert.ok(first.issues.some((issue) => issue.code === "AUTO_FILLED" && issue.message.includes("PO No.")));
+  await assert.rejects(commitWorkbook(first.runId, admin), /explicit choice to skip/);
+  const repaired = await repairWorkbookPreview(first.runId, [{ sheet: "FABRIC ORDERS", rowNumber: 3, fields: { Price: "120" } }], admin);
+  assert.ok(!repaired.issues.some((issue) => issue.severity === "error"));
+  await commitWorkbook(repaired.runId, admin);
+  assert.equal(all("fabricOrders").length, 1);
+  assert.equal(all("fabricOrders")[0].poNumber, "PO2627/001");
+  const skipped = await previewWorkbook(buffer, "missing-price.xlsx", admin);
+  await commitWorkbook(skipped.runId, admin, { ignoreIncomplete: true });
+  assert.equal(all("fabricOrders").length, 0);
+  assert.ok(all("importIssues").some((issue) => issue.code === "REQUIRED_FIELD"));
 });

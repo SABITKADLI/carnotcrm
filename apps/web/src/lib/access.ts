@@ -18,14 +18,7 @@ export const VISIBLE_APP_VIEWS = [
   "settings",
 ] as const;
 
-export const VALID_APP_VIEWS = [
-  ...VISIBLE_APP_VIEWS,
-  // Preserved compatibility routes. They are deliberately absent from the menu.
-  "orders",
-  "garment-production",
-  "fabrics",
-  "purchases",
-] as const;
+export const VALID_APP_VIEWS = VISIBLE_APP_VIEWS;
 
 export type AppView = (typeof VALID_APP_VIEWS)[number];
 export type VisibleAppView = (typeof VISIBLE_APP_VIEWS)[number];

@@ -92,10 +92,6 @@ const headings: Record<string, [string, string]> = {
     "Excel and Carnot, kept in step.",
     "Preview, validate and commit the company tracker, or download the current portal state.",
   ],
-  orders: [
-    "Every order, considered.",
-    "From a customer brief to the final quality check.",
-  ],
   cutting: [
     "Make more of every metre.",
     "Plan components, review utilization and reserve your fabric.",
@@ -104,25 +100,13 @@ const headings: Record<string, [string, string]> = {
     "Every factory job, in view.",
     "Work orders, cutting quantities, consumption, ageing and partner updates.",
   ],
-  "garment-production": [
-    "Good work, in progress.",
-    "Garment assignments for the existing made-to-order workflow.",
-  ],
-  fabrics: [
-    "The material comes first.",
-    "Every fabric, dye lot and metre, accounted for.",
-  ],
-  purchases: [
-    "Keep the studio supplied.",
-    "Place purchase orders and receive fabric as it arrives.",
-  ],
   products: [
     "Made. Checked. Ready.",
     "Finished pieces available for customers or your Shopify store.",
   ],
   customers: [
     "Relationships, well kept.",
-    "The people and brands you make things for.",
+    "Customer and party records shared by fabric orders and billing.",
   ],
   suppliers: [
     "Your sourcing circle.",
@@ -134,7 +118,7 @@ const headings: Record<string, [string, string]> = {
   ],
   reports: [
     "Know how the studio is doing.",
-    "Sales, inventory and production performance from your records.",
+    "Fabric sourcing, transport, production, inward, discrepancies and billing for your chosen period.",
   ],
   activity: [
     "A record of the work.",
@@ -146,11 +130,6 @@ const headings: Record<string, [string, string]> = {
   ],
 };
 const actions: Record<string, [string, string]> = {
-  overview: ["New order", "order"],
-  orders: ["New order", "order"],
-  fabrics: ["Add fabric", "fabric"],
-  purchases: ["New purchase", "purchase"],
-  production: ["Assign work", "assign"],
   products: ["Bill & deliver", "invoice"],
   invoices: ["New invoice", "invoice"],
 };
@@ -272,30 +251,20 @@ export function Workspace({
   }
   const tailor = ["tailor", "jobworker"].includes(state.user.role);
   const nav = navigation.filter((n) => canAccessView(state.user.role, n.id));
-  const total = state.jobs.reduce((s, j) => s + j.quantity, 0),
-    finished = state.jobs.reduce((s, j) => s + j.finished, 0);
+  const total = state.workOrders.reduce((s, work) => s + work.expectedQuantity, 0),
+    finished = state.inwards.reduce((s, inward) => s + inward.totalInward, 0);
   const primary = state.user.role === "admin" ? actions[view] : undefined;
   const exportData = () => {
     const data: object[] =
-      view === "fabrics"
-        ? state.fabrics
-        : view === "purchases"
-          ? state.purchases
-          : view === "products"
+      view === "products"
             ? state.products
             : view === "invoices"
               ? state.invoices
               : view === "activity"
                 ? state.activities
                 : ["customers", "suppliers"].includes(view)
-                  ? state.contacts.filter(
-                      (c) =>
-                        c.type ===
-                        (view === "customers" ? "customer" : "supplier"),
-                    )
-                  : view === "garment-production"
-                    ? state.jobs
-                    : state.orders;
+                ? state.organizations.filter((organization) => organization.roles.some((role) => view === "customers" ? ["customer", "distributor"].includes(role) : ["supplier", "vendor"].includes(role)))
+                : [];
     if (!data.length) {
       setToast("There are no records to export yet");
       return;
@@ -350,15 +319,6 @@ export function Workspace({
               >
                 <n.icon size={18} strokeWidth={1.5} />
                 {n.label}
-                {n.id === "orders" && (
-                  <span className="nav-count">
-                    {
-                      state.orders.filter(
-                        (o) => !["ready", "cancelled"].includes(o.status),
-                      ).length
-                    }
-                  </span>
-                )}
               </Link>
             </div>
           ))}
@@ -367,7 +327,7 @@ export function Workspace({
           <div className="studio-pulse">
             <span className="eyebrow">ON THE PRODUCTION FLOOR</span>
             <p>
-              {finished} <span>/ {total} pieces finished</span>
+              {Math.round(finished).toLocaleString("en-IN")} <span>/ {Math.round(total).toLocaleString("en-IN")} pieces inward / expected</span>
             </p>
             <Progress value={total ? (finished / total) * 100 : 0} />
           </div>
@@ -494,40 +454,14 @@ export function Workspace({
                   </button>
                 )}
               </div>
-              {[
-                "orders",
-                "invoices",
-                "garment-production",
-                "purchases",
-              ].includes(view) && (
+              {view === "invoices" && (
                 <select
                   aria-label="Filter by status"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                 >
                   <option value="all">All statuses</option>
-                  {(view === "orders"
-                    ? [
-                        "draft",
-                        "planned",
-                        "production",
-                        "quality",
-                        "ready",
-                        "cancelled",
-                      ]
-                    : view === "invoices"
-                      ? ["unpaid", "partial", "paid", "overdue"]
-                      : view === "purchases"
-                        ? ["ordered", "partial", "received"]
-                        : [
-                            "assigned",
-                            "cutting",
-                            "stitching",
-                            "finishing",
-                            "submitted",
-                            "accepted",
-                          ]
-                  ).map((s) => (
+                  {["unpaid", "partial", "paid", "overdue"].map((s) => (
                     <option key={s} value={s}>
                       {s.charAt(0).toUpperCase() + s.slice(1)}
                     </option>
@@ -536,11 +470,11 @@ export function Workspace({
               )}
             </div>
           )}
-          {["cutting", "customers"].includes(view) ? (
+          {view === "cutting" ? (
             <section className="panel under-construction">
               <span className="eyebrow">UNDER CONSTRUCTION</span>
               <h2>
-                {view === "cutting" ? "Cutting room" : "Customer workspace"}
+                Cutting room
               </h2>
               <p>
                 This legacy area is being rebuilt around the fabric order and
@@ -555,6 +489,7 @@ export function Workspace({
               "production",
               "cleared-lots",
               "workbook-sync",
+              "customers",
               "suppliers",
               "reports",
             ].includes(view) ? (
@@ -568,7 +503,7 @@ export function Workspace({
             />
           ) : (
             <Views
-              view={view === "garment-production" ? "production" : view}
+              view={view}
               state={state}
               query={query}
               filter={filter}

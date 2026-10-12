@@ -69,7 +69,7 @@ export type WorkbookPreview = {
   runId: string;
   summary: Record<string, number>;
   issues: Array<
-    Pick<ImportIssue, "sheet" | "rowNumber" | "severity" | "message">
+    Pick<ImportIssue, "sheet" | "rowNumber" | "severity" | "code" | "message">
   >;
   mode: "replace" | "sync";
   conflicts: Array<
@@ -81,6 +81,7 @@ type ParsedWorkbook = {
   issues: ImportIssue[];
   counts: Record<string, number>;
   fingerprint: string;
+  sourceWorkbook?: string;
   baseline: Record<
     string,
     {
@@ -263,7 +264,7 @@ function productionRow(
     itemName: text(row, 6),
     bodyFabric,
     trimFabric: number(row, 8),
-    issuedDate: date(row, 9),
+    issuedDate: date(row, 9) || outward,
     ageingDays:
       actualReady && outward
         ? Math.max(
@@ -389,7 +390,7 @@ export async function parseWorkbook(
   org("Singal Fabrics", "legal_entity");
   const master = workbook.getWorksheet("MASTER DATA")!;
   const specs: FabricSpec[] = [];
-  for (const row of rows(master, 3, (candidate) => !!text(candidate, 1))) {
+  for (const row of rows(master, 3, (candidate) => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].some((column) => text(candidate, column)))) {
     const values = Object.fromEntries(
       Array.from({ length: 10 }, (_, index) => [
         index + 1,
@@ -487,18 +488,41 @@ export async function parseWorkbook(
   );
   const orderSheet = workbook.getWorksheet("FABRIC ORDERS")!;
   const orders: FabricOrder[] = [];
+  const poSequences = new Map<string, number>();
+  for (const row of rows(orderSheet, 3, (candidate) => !!text(candidate, 3))) {
+    const matched = text(row, 3).match(/^(PO\d{4}\/)(\d+)$/i);
+    if (matched)
+      poSequences.set(
+        matched[1],
+        Math.max(poSequences.get(matched[1]) || 0, Number(matched[2])),
+      );
+  }
   for (const row of rows(
     orderSheet,
     3,
-    (candidate) => !!text(candidate, 3) || !!text(candidate, 5),
+    (candidate) => [1, 2, 3, 4, 5, 6, 15, 17, 18, 19, 20, 21].some((column) => text(candidate, column)),
   )) {
-    const poNumber = text(row, 3),
-      fabricName = text(row, 5),
+    let poNumber = text(row, 3);
+    const fabricName = text(row, 5),
       orderDate = date(row, 2),
       quantityOrdered = number(row, 19),
       pricePerMetre = number(row, 15),
       purposeParty = text(row, 20),
       fabricFor = text(row, 21);
+    if (!poNumber && orderDate) {
+      const year = Number(orderDate.slice(0, 4));
+      const fiscalYear = Number(orderDate.slice(5, 7)) >= 4 ? year : year - 1;
+      const prefix = `PO${String(fiscalYear).slice(-2)}${String(fiscalYear + 1).slice(-2)}/`;
+      const next = (poSequences.get(prefix) || 0) + 1;
+      poSequences.set(prefix, next);
+      poNumber = `${prefix}${String(next).padStart(3, "0")}`;
+      issues.push({
+        ...base("issue"), runId, sheet: "FABRIC ORDERS", rowNumber: row.number,
+        severity: "warning", code: "AUTO_FILLED",
+        message: `PO No. was blank; generated ${poNumber} from the order financial year.`,
+        values: { 3: "", generated: poNumber }, resolved: false,
+      });
+    }
     const values = Object.fromEntries(
       Array.from({ length: 25 }, (_, index) => [
         index + 1,
@@ -594,14 +618,20 @@ export async function parseWorkbook(
   for (const row of rows(
     transportSheet,
     3,
-    (candidate) =>
-      !!text(candidate, 12) || (!!text(candidate, 2) && !!number(candidate, 9)),
+    (candidate) => [1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13].some((column) => text(candidate, column)),
   )) {
     const poNumber = text(row, 1),
       dcNumber = text(row, 12),
-      fabricName = text(row, 2),
-      supplierName = text(row, 3),
-      partyName = text(row, 4),
+      linkedOrder = orderByPo.get(normalized(poNumber)),
+      fabricName = text(row, 2) || linkedOrder?.fabricName || "",
+      supplierName = text(row, 3) || linkedOrder?.supplierName || "",
+      partyName =
+        text(row, 4) ||
+        (linkedOrder?.partyIds?.[0]
+          ? organizations.get(linkedOrder.partyIds[0])?.name
+          : "") ||
+        linkedOrder?.purposeParty ||
+        "",
       jobworkerName = text(row, 10),
       quantity = number(row, 9),
       transportName = text(row, 8),
@@ -627,12 +657,11 @@ export async function parseWorkbook(
       ])
     )
       continue;
-    const linkedOrder = orderByPo.get(normalized(poNumber));
     const supplier = org(supplierName, "supplier"),
       party = org(partyName, "distributor"),
       jobworker = org(jobworkerName, "jobworker"),
       transporter = org(transportName, "transporter");
-    const personKey = normalized(pickedBy);
+    const personKey = `${transporter.id}:${normalized(pickedBy)}`;
     let person = people.get(personKey);
     if (!person) {
       person = {
@@ -644,7 +673,8 @@ export async function parseWorkbook(
           pickedBy,
         ),
         name: pickedBy,
-        role: "pickup",
+        organizationId: transporter.id,
+        role: "driver",
         email: "",
         phone: "",
         notes: "",
@@ -730,6 +760,7 @@ export async function parseWorkbook(
           phone: consignee.phone,
         },
         jobworkerId: consignee.id,
+        driverPersonId: movement.pickedByPersonId,
         driverName: movement.pickedBy,
         driverPhone: "",
         transportName: movement.transportName,
@@ -801,9 +832,16 @@ export async function parseWorkbook(
   for (const row of rows(
     productionSheet,
     4,
-    (candidate) => !!text(candidate, 1) && !!text(candidate, 4),
+    (candidate) => [1, 2, 4, 5, 6, 7, 9, 33].some((column) => text(candidate, column)),
   )) {
     const record = productionRow(row, "PRODUCTION", org, brands, challans);
+    if (!date(row, 9) && record.issuedDate)
+      issues.push({
+        ...base("issue"), runId, sheet: "PRODUCTION", rowNumber: row.number,
+        severity: "warning", code: "AUTO_FILLED",
+        message: "WO Issued Date was blank; used Fabric Outward Date.",
+        values: { 9: "", generated: record.issuedDate }, resolved: false,
+      });
     record.id = syncedId(
       "workOrders",
       "PRODUCTION",
@@ -835,9 +873,16 @@ export async function parseWorkbook(
   for (const row of rows(
     clearedSheet,
     4,
-    (candidate) => !!text(candidate, 1) && !!text(candidate, 4),
+    (candidate) => [1, 2, 4, 5, 6, 7, 9, 61].some((column) => text(candidate, column)),
   )) {
     const record = productionRow(row, "CLEARED LOTS", org, brands, challans);
+    if (!date(row, 9) && record.issuedDate)
+      issues.push({
+        ...base("issue"), runId, sheet: "CLEARED LOTS", rowNumber: row.number,
+        severity: "warning", code: "AUTO_FILLED",
+        message: "WO Issued Date was blank; used Fabric Outward Date.",
+        values: { 9: "", generated: record.issuedDate }, resolved: false,
+      });
     record.id = syncedId(
       "workOrders",
       "CLEARED LOTS",
@@ -1137,7 +1182,7 @@ export async function previewWorkbook(
     summary: parsed.counts,
     sourceFingerprint: parsed.fingerprint,
     createdBy: user.id,
-    payload: pack(parsed),
+    payload: pack({ ...parsed, sourceWorkbook: buffer.toString("base64") }),
   };
   await transaction(() => {
     clearKind("syncConflicts");
@@ -1149,10 +1194,11 @@ export async function previewWorkbook(
     summary: parsed.counts,
     issues: parsed.issues
       .slice(0, 200)
-      .map(({ sheet, rowNumber, severity, message }) => ({
+      .map(({ sheet, rowNumber, severity, code, message }) => ({
         sheet,
         rowNumber,
         severity,
+        code,
         message,
       })),
     mode,
@@ -1166,13 +1212,100 @@ export async function previewWorkbook(
   };
 }
 
-export async function commitWorkbook(runId: string, user: User) {
+const repairColumns: Record<string, Record<string, number>> = {
+  "MASTER DATA": {
+    "Fabric Name": 1, Width: 3, Folding: 4, Content: 8,
+    "Supplier Name": 9,
+  },
+  "FABRIC ORDERS": {
+    "Order By": 1, "Order Date": 2, "PO No.": 3,
+    "Fabric Name": 5, Supplier: 6, Price: 15, Designs: 17,
+    Colors: 18, "Qty Ordered": 19, "Purpose / Party": 20,
+    "Fabric For": 21,
+  },
+  TRANSPORT: {
+    "Fabric Name": 2, Supplier: 3, "Party Name": 4,
+    "No. of Bales": 7, "Transport Name": 8, "Fabric Qty": 9,
+    Jobworker: 10, "Picked By": 11, "Outward DC No.": 12,
+    "DC Issue Date": 13,
+  },
+  PRODUCTION: {
+    "DC No.": 1, Jobworker: 2, "WO No.": 4, Brand: 5,
+    "Item Name": 6, "Body Fabric": 7, "WO Issued Date": 9, Status: 33,
+  },
+  "CLEARED LOTS": {
+    "DC No.": 1, Jobworker: 2, "WO No.": 4, Brand: 5,
+    "Item Name": 6, "Body Fabric": 7, "WO Issued Date": 9,
+    "Inward Date": 61,
+  },
+};
+
+export async function repairWorkbookPreview(
+  runId: string,
+  repairs: Array<{
+    sheet: string;
+    rowNumber: number;
+    fields: Record<string, string>;
+  }>,
+  user: User,
+): Promise<WorkbookPreview> {
+  if (user.role !== "admin") throw new Error("Administrator access required");
+  if (!repairs.length) throw new Error("Enter at least one missing value");
+  const run = await withStore(() => get("syncRuns", runId));
+  if (run.status !== "preview" || !run.payload)
+    throw new Error("This preview is no longer available");
+  const parsed = unpack<ParsedWorkbook>(run.payload);
+  if (!parsed.sourceWorkbook)
+    throw new Error("Upload the workbook again to repair its rows");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    Buffer.from(parsed.sourceWorkbook, "base64") as unknown as ExcelJS.Buffer,
+  );
+  for (const repair of repairs) {
+    const sheet = workbook.getWorksheet(repair.sheet);
+    const columns = repairColumns[repair.sheet];
+    const issue = parsed.issues.find(
+      (item) =>
+        item.sheet === repair.sheet &&
+        item.rowNumber === repair.rowNumber &&
+        item.code === "REQUIRED_FIELD",
+    );
+    if (!sheet || !columns || !issue || repair.rowNumber < 3)
+      throw new Error("A repair refers to a row without a missing field");
+    for (const [field, value] of Object.entries(repair.fields)) {
+      const column = columns[field];
+      if (!column || !issue.message.includes(field) || !value.trim())
+        throw new Error(`Enter a valid value for ${field}`);
+      if (cell(sheet.getRow(repair.rowNumber), column) !== "")
+        throw new Error(`${field} is no longer blank in row ${repair.rowNumber}`);
+      sheet.getRow(repair.rowNumber).getCell(column).value = value.trim();
+    }
+  }
+  return previewWorkbook(
+    Buffer.from(await workbook.xlsx.writeBuffer()),
+    run.fileName,
+    user,
+  );
+}
+
+export async function commitWorkbook(
+  runId: string,
+  user: User,
+  options: { ignoreIncomplete?: boolean } = {},
+) {
   if (user.role !== "admin") throw new Error("Administrator access required");
   return transaction(() => {
     const run = get("syncRuns", runId);
     if (run.status !== "preview" || !run.payload)
       throw new Error("This workbook preview is not available for commit");
     const parsed = unpack<ParsedWorkbook>(run.payload);
+    const errorCount = parsed.issues.filter(
+      (issue) => issue.severity === "error",
+    ).length;
+    if (errorCount && !options.ignoreIncomplete)
+      throw new Error(
+        `${errorCount} incomplete workbook rows need values or an explicit choice to skip them`,
+      );
     for (const conflict of all("syncConflicts").filter(
       (item) => item.runId === run.id,
     )) {

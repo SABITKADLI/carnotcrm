@@ -2121,11 +2121,13 @@ export function EnhancedPartners({
   query,
   mutate,
   suppliersOnly = false,
+  customersOnly = false,
 }: {
   state: State;
   query: string;
   mutate: Mutate;
   suppliersOnly?: boolean;
+  customersOnly?: boolean;
 }) {
   const [selected, setSelected] = useState<Organization | null>(null);
   const [adding, setAdding] = useState(false);
@@ -2135,6 +2137,10 @@ export function EnhancedPartners({
       !item.archived &&
       (!suppliersOnly ||
         item.roles.some((role) => role === "supplier" || role === "vendor")) &&
+      (!customersOnly ||
+        item.roles.some(
+          (role) => role === "customer" || role === "distributor",
+        )) &&
       JSON.stringify(item).toLowerCase().includes(query.toLowerCase()),
   );
   const visible = partners.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -2220,7 +2226,13 @@ export function EnhancedPartners({
       </div>
       <section className="panel operations-panel">
         <SectionTitle
-          title={suppliersOnly ? "Suppliers / Vendors" : "Partner directory"}
+          title={
+            customersOnly
+              ? "Customers / parties"
+              : suppliersOnly
+                ? "Suppliers / Vendors"
+                : "Partner directory"
+          }
           action={
             state.user.role === "admin" ? (
               <button
@@ -2232,7 +2244,9 @@ export function EnhancedPartners({
             ) : undefined
           }
         >
-          {suppliersOnly
+          {customersOnly
+            ? "The same customer and party records used by fabric POs, transport, and invoices."
+            : suppliersOnly
             ? "Company and contact details, GSTIN, location, notes, and purchases in one directory."
             : "The shared master for suppliers, agents, jobworkers, transporters, coolies, and customers / parties."}
         </SectionTitle>
@@ -2243,7 +2257,7 @@ export function EnhancedPartners({
               "Roles",
               "Contact",
               "Location / GSTIN",
-              suppliersOnly ? "Purchases" : "Source",
+              customersOnly ? "POs / billed" : suppliersOnly ? "Purchases" : "Source",
               "",
             ],
             visible.map((item) => {
@@ -2277,7 +2291,20 @@ export function EnhancedPartners({
                     <small>{item.taxId || "No GSTIN"}</small>
                   </td>
                   <td>
-                    {suppliersOnly ? (
+                    {customersOnly ? (
+                      <>
+                        {state.fabricOrders.filter((order) =>
+                          order.partyIds?.includes(item.id),
+                        ).length} POs
+                        <small>
+                          {money(
+                            state.invoices
+                              .filter((invoice) => invoice.customerId === item.id)
+                              .reduce((sum, invoice) => sum + invoice.total, 0) / 100,
+                          )} billed
+                        </small>
+                      </>
+                    ) : suppliersOnly ? (
                       <>
                         {purchases.length} POs
                         <small>
@@ -2353,7 +2380,7 @@ export function EnhancedPartners({
                       value={role.value}
                       defaultChecked={
                         selected?.roles.includes(role.value) ||
-                        (adding && role.value === "supplier")
+                        (adding && role.value === (customersOnly ? "distributor" : "supplier"))
                       }
                     />{" "}
                     {role.label}
@@ -2419,7 +2446,30 @@ export function EnhancedReports({
   const inwards = state.inwards.filter((item) =>
     inSelectedPeriod(item.inwardDate, period),
   );
+  const workOrders = state.workOrders.filter((item) =>
+    inSelectedPeriod(item.issuedDate || item.fabricOutwardDate, period),
+  );
+  const invoices = state.invoices.filter((item) =>
+    inSelectedPeriod(item.createdAt, period),
+  );
   const inwardWork = new Map(state.workOrders.map((item) => [item.id, item]));
+  const inwardByWork = new Map<string, number>();
+  for (const inward of state.inwards)
+    inwardByWork.set(inward.workOrderId, (inwardByWork.get(inward.workOrderId) || 0) + inward.totalInward);
+  const grouped = <T,>(rows: T[], key: (row: T) => string, quantity: (row: T) => number, value: (row: T) => number) =>
+    Object.entries(rows.reduce<Record<string, { count: number; quantity: number; value: number }>>((acc, row) => {
+      const name = key(row) || "Unspecified";
+      const current = acc[name] || { count: 0, quantity: 0, value: 0 };
+      current.count++;
+      current.quantity += quantity(row);
+      current.value += value(row);
+      acc[name] = current;
+      return acc;
+    }, {})).sort((a, b) => b[1].value - a[1].value || b[1].quantity - a[1].quantity);
+  const byStatus = grouped(orders, (order) => order.status, (order) => order.quantityOrdered, (order) => order.fabricValue);
+  const byStage = grouped(workOrders, (work) => work.status, (work) => work.bodyFabric, (work) => work.value);
+  const byJobworker = grouped(workOrders, (work) => work.jobworkerName, (work) => work.bodyFabric, (work) => work.value);
+  const byBrand = grouped(workOrders, (work) => work.brandName, (work) => work.expectedQuantity, (work) => work.value);
   const supplierTotals = Object.entries(
     orders.reduce<Record<string, { metres: number; value: number }>>(
       (acc, order) => {
@@ -2438,53 +2488,57 @@ export function EnhancedReports({
     (sum, item) => sum + item.damagePiecesQuantity,
     0,
   );
+  const mix = inwards.reduce((sum, item) => sum + item.mixPiecesQuantity, 0);
+  const orderedMetres = orders.reduce((sum, item) => sum + item.quantityOrdered, 0);
+  const receivedMetres = orders.reduce((sum, item) => sum + item.receivedMetres, 0);
+  const dispatchedMetres = transports.reduce((sum, item) => sum + item.fabricQuantity, 0);
+  const unplanned = transports.filter((item) => !item.fabricOrderId);
+  const expectedPieces = workOrders.reduce((sum, item) => sum + item.expectedQuantity, 0);
+  const cutPieces = workOrders.reduce((sum, item) => sum + item.totalCutQuantity, 0);
+  const inwardPieces = workOrders.reduce((sum, item) => sum + (inwardByWork.get(item.id) || 0), 0);
+  const invoiced = invoices.reduce((sum, item) => sum + item.total, 0) / 100;
+  const outstanding = invoices.reduce((sum, item) => sum + item.total - item.paid, 0) / 100;
+  const discrepancies = workOrders.map((work) => ({
+    work,
+    inward: inwardByWork.get(work.id) || 0,
+    difference: (inwardByWork.get(work.id) || 0) - work.totalCutQuantity,
+  })).filter((row) => row.inward > 0 && row.work.totalCutQuantity > 0 && row.difference !== 0).sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference));
+  const missingCutQuantity = workOrders.filter((work) => (inwardByWork.get(work.id) || 0) > 0 && work.totalCutQuantity === 0).length;
+  const formatQuantity = (quantity: number) => quantity.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  const formatPieces = (quantity: number) => Math.round(quantity).toLocaleString("en-IN");
+  const stat = (label: string, number: string, context: string) => (
+    <div className="stat" key={label}><span className="stat-label">{label}</span><strong>{number}</strong><span>{context}</span></div>
+  );
+  const breakdown = (title: string, description: string, rows: ReturnType<typeof grouped>, unit: string) => (
+    <section className="panel"><SectionTitle title={title}>{description}</SectionTitle>
+      {rows.length ? table(["Group", "Records", `Quantity (${unit})`, "Value"], rows.map(([name, total]) => (
+        <tr key={name}><td><strong>{name}</strong></td><td>{total.count}</td><td>{formatQuantity(total.quantity)}</td><td>{money(total.value)}</td></tr>
+      ))) : <Empty title="No records in this period" />}
+    </section>
+  );
   return (
     <>
       <PeriodBar period={period} />
       <div className="stats">
-        <div className="stat">
-          <span className="stat-label">Fabric ordered</span>
-          <strong>
-            {orders
-              .reduce((sum, item) => sum + item.quantityOrdered, 0)
-              .toLocaleString("en-IN")}{" "}
-            m
-          </strong>
-          <span>
-            {money(orders.reduce((sum, item) => sum + item.fabricValue, 0))}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Fabric dispatched</span>
-          <strong>
-            {transports
-              .reduce((sum, item) => sum + item.fabricQuantity, 0)
-              .toLocaleString("en-IN")}{" "}
-            m
-          </strong>
-          <span>
-            {transports.reduce((sum, item) => sum + item.numberOfBales, 0)}{" "}
-            bales
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Garments inward</span>
-          <strong>
-            {inwards
-              .reduce((sum, item) => sum + item.totalInward, 0)
-              .toLocaleString("en-IN")}
-          </strong>
-          <span>{damage} damaged pieces</span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Unplanned movements</span>
-          <strong>
-            {transports.filter((item) => !item.fabricOrderId).length}
-          </strong>
-          <span>without a linked PO</span>
-        </div>
+        {stat("Fabric ordered", `${formatQuantity(orderedMetres)} m`, `${money(orders.reduce((sum, item) => sum + item.fabricValue, 0))} across ${orders.length} POs`)}
+        {stat("Fabric received", `${formatQuantity(receivedMetres)} m`, `${formatQuantity(orderedMetres - receivedMetres)} m outstanding on period POs`)}
+        {stat("Fabric dispatched", `${formatQuantity(dispatchedMetres)} m`, `${transports.reduce((sum, item) => sum + item.numberOfBales, 0)} bales on ${transports.length} movements`)}
+        {stat("Unplanned transport", `${unplanned.length} lines`, `${formatQuantity(unplanned.reduce((sum, item) => sum + item.fabricQuantity, 0))} m without a PO`)}
+        {stat("Production issued", `${workOrders.length} WOs`, `${formatQuantity(workOrders.reduce((sum, item) => sum + item.bodyFabric, 0))} m of body fabric`)}
+        {stat("Expected / cut", `${formatPieces(expectedPieces)} / ${formatPieces(cutPieces)}`, "pieces on period work orders")}
+        {stat("Inward", `${formatQuantity(inwards.reduce((sum, item) => sum + item.totalInward, 0))} pcs`, `${formatQuantity(inwardPieces)} pcs tied to period WOs`)}
+        {stat("Damage / mix", `${formatQuantity(damage)} / ${formatQuantity(mix)}`, "pieces received during period")}
+        {stat("Cut–inward differences", `${discrepancies.length} lots`, `${formatQuantity(discrepancies.reduce((sum, item) => sum + Math.abs(item.difference), 0))} pieces to review`)}
+        {stat("Cut quantities missing", `${missingCutQuantity} lots`, "inward recorded without a cut count")}
+        {stat("Invoiced", money(invoiced), `${invoices.length} invoices in period`)}
+        {stat("Outstanding", money(outstanding), "unpaid on period invoices")}
+        {stat("Finished stock", `${formatQuantity(state.products.reduce((sum, item) => sum + item.stock, 0))} pcs`, `${formatQuantity(state.products.reduce((sum, item) => sum + item.channelStock, 0))} allocated to Shopify, current balance`)}
       </div>
       <div className="operations-dashboard">
+        {breakdown("PO status", "Ordered quantity and value by current status.", byStatus, "m")}
+        {breakdown("Production stage", "Work order fabric and value by current stage.", byStage, "m")}
+        {breakdown("Jobworker workload", "Fabric issued and value by factory.", byJobworker, "m")}
+        {breakdown("Brand production", "Expected pieces and fabric value by brand.", byBrand, "pcs")}
         <section className="panel">
           <SectionTitle title="Purchasing by supplier">
             Quantity and order value for the selected period.
@@ -2532,6 +2586,12 @@ export function EnhancedReports({
           ) : (
             <Empty title="No inward in this period" />
           )}
+        </section>
+        <section className="panel">
+          <SectionTitle title="Cut to inward differences">Lots where received pieces differ from cut pieces. Positive values are excess; negative values are shortages.</SectionTitle>
+          {discrepancies.length ? table(["Work order", "Jobworker", "Cut", "Inward", "Difference"], discrepancies.slice(0, 30).map(({ work, inward, difference }) => (
+            <tr key={work.id}><td><strong>{work.woNumber}</strong></td><td>{work.jobworkerName}</td><td>{formatQuantity(work.totalCutQuantity)}</td><td>{formatQuantity(inward)}</td><td>{difference > 0 ? "+" : ""}{formatQuantity(difference)}</td></tr>
+          ))) : <Empty title="No cut-to-inward differences in this period" />}
         </section>
       </div>
     </>

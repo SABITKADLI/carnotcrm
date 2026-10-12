@@ -9,14 +9,12 @@ import {
   Download,
   FileSpreadsheet,
   PackageCheck,
-  Printer,
   Truck,
   Upload,
   X,
 } from "lucide-react";
 import {
   PRODUCTION_SIZES,
-  shortDate,
   type ProductionWorkOrder,
   type State,
 } from "@/lib/types";
@@ -458,6 +456,15 @@ export function OperationsViews({
     return <EnhancedDashboard state={state} filters={filters} />;
   if (view === "master-data")
     return <EnhancedPartners state={state} mutate={mutate} query={query} />;
+  if (view === "customers")
+    return (
+      <EnhancedPartners
+        state={state}
+        mutate={mutate}
+        query={query}
+        customersOnly
+      />
+    );
   if (view === "suppliers")
     return (
       <EnhancedPartners
@@ -479,165 +486,6 @@ export function OperationsViews({
         filters={filters}
       />
     );
-  if (view === "fabric-orders-legacy") {
-    const orders = state.fabricOrders.filter((order) =>
-      match(
-        order.poNumber,
-        order.fabricName,
-        order.supplierName,
-        order.purposeParty,
-        order.status,
-      ),
-    );
-    const visible = paginate(orders, page);
-    return (
-      <>
-        {state.user.role === "admin" && (
-          <NewFabricOrder state={state} mutate={mutate} />
-        )}
-        <section className="panel operations-panel">
-          <SectionTitle title="Fabric purchase orders">
-            Every workbook column is stored with its source row and an
-            audit-safe calculated value.
-          </SectionTitle>
-          {orders.length ? (
-            <Table
-              headings={[
-                "PO / date",
-                "Fabric",
-                "Supplier",
-                "Specifications",
-                "Purpose",
-                "Ordered / received",
-                "Value",
-                "Status",
-                "",
-              ]}
-            >
-              {visible.items.map((order) => (
-                <tr key={order.id}>
-                  <td>
-                    <strong>{order.poNumber}</strong>
-                    <small>{shortDate(order.orderDate)}</small>
-                  </td>
-                  <td>
-                    <strong>{order.fabricName}</strong>
-                    <small>{order.internalItemName || order.fabricType}</small>
-                  </td>
-                  <td>
-                    {order.supplierName}
-                    <small>{order.agentName}</small>
-                  </td>
-                  <td>
-                    {order.width}&quot; · {order.folding} fold
-                    <small>
-                      {order.weave} · {order.content}
-                    </small>
-                  </td>
-                  <td>
-                    {order.fabricFor}
-                    <small>{order.purposeParty}</small>
-                  </td>
-                  <td>
-                    {order.quantityOrdered.toLocaleString("en-IN")} m
-                    <small>
-                      {order.receivedMetres.toLocaleString("en-IN")} m received
-                    </small>
-                  </td>
-                  <td>
-                    {rupees(order.fabricValue)}
-                    <small>{rupees(order.pricePerMetre)} / m</small>
-                  </td>
-                  <td>
-                    <Badge>{order.status}</Badge>
-                  </td>
-                  <td>
-                    {state.user.role === "admin" &&
-                      order.receivedMetres < order.quantityOrdered && (
-                        <button
-                          className="text-link"
-                          onClick={async () => {
-                            const value = window.prompt(
-                              `Metres received against ${order.poNumber}`,
-                            );
-                            if (!value) return;
-                            await mutate("fabricReceipt", {
-                              fabricOrderId: order.id,
-                              quantityMetres: value,
-                              receiptDate: new Date()
-                                .toISOString()
-                                .slice(0, 10),
-                              warehouse: "Singal Fabrics",
-                            });
-                          }}
-                        >
-                          Receive
-                        </button>
-                      )}
-                    {state.user.role === "supplier" && (
-                      <button
-                        className="text-link"
-                        onClick={async () => {
-                          const estimate = window.prompt(
-                            "Updated delivery estimate (YYYY-MM-DD)",
-                            order.supplierDeliveryEstimate ||
-                              order.deliveryDate,
-                          );
-                          if (estimate === null) return;
-                          const dispatch =
-                            window.prompt(
-                              "Dispatch / LR details",
-                              order.dispatchDetails || "",
-                            ) || "";
-                          const notes =
-                            window.prompt(
-                              "Supplier note",
-                              order.supplierNotes || "",
-                            ) || "";
-                          await mutate("supplierUpdate", {
-                            id: order.id,
-                            acknowledged: true,
-                            deliveryEstimate: estimate,
-                            dispatchDetails: dispatch,
-                            notes,
-                          });
-                        }}
-                      >
-                        {order.supplierAcknowledgedAt
-                          ? "Update dispatch"
-                          : "Acknowledge"}
-                      </button>
-                    )}
-                    {["agent", "distributor"].includes(state.user.role) && (
-                      <button
-                        className="text-link"
-                        onClick={async () => {
-                          const note = window.prompt("Add a note to this PO");
-                          if (note)
-                            await mutate("recordNote", {
-                              kind: "fabricOrders",
-                              id: order.id,
-                              note,
-                            });
-                        }}
-                      >
-                        Add note
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </Table>
-          ) : (
-            <Empty title="No fabric orders found">
-              Upload the company workbook or change your search.
-            </Empty>
-          )}
-          <Pager total={orders.length} page={visible.page} setPage={setPage} />
-        </section>
-      </>
-    );
-  }
   if (view === "transport-dc")
     return (
       <>
@@ -647,150 +495,6 @@ export function OperationsViews({
         <EnhancedTransport state={state} query={query} filters={filters} />
       </>
     );
-  if (view === "transport-dc-legacy") {
-    const challanById = new Map(
-      state.challans.map((challan) => [challan.id, challan]),
-    );
-    const movements = state.transports.filter((item) =>
-      match(
-        item.outwardDcNumber,
-        item.fabricName,
-        item.supplierName,
-        item.destinationJobworkerName,
-        item.transportName,
-      ),
-    );
-    const visible = paginate(movements, page);
-    return (
-      <>
-        {state.user.role === "admin" && (
-          <NewTransport state={state} mutate={mutate} />
-        )}
-        <div className="stats compact-stats">
-          {metric(
-            "Delivery challans",
-            state.challans.length,
-            "issued and tracked",
-          )}
-          {metric(
-            "Fabric dispatched",
-            `${state.transports.reduce((sum, item) => sum + item.fabricQuantity, 0).toLocaleString("en-IN")} m`,
-            "to jobworkers",
-          )}
-          {metric(
-            "Bundles",
-            state.transports.reduce((sum, item) => sum + item.numberOfBales, 0),
-            "across movements",
-          )}
-          {metric(
-            "Unplanned",
-            state.transports.filter((item) => !item.fabricOrderId).length,
-            "without a linked PO",
-          )}
-        </div>
-        <section className="panel operations-panel">
-          <SectionTitle title="Transport and delivery challans">
-            Each line keeps its LR, bundle, pickup, factory, stage and source
-            workbook details.
-          </SectionTitle>
-          {movements.length ? (
-            <Table
-              headings={[
-                "DC / PO",
-                "Fabric",
-                "Supplier / party",
-                "Transport",
-                "Destination",
-                "Quantity",
-                "Stage",
-                "Print",
-              ]}
-            >
-              {visible.items.map((item) => (
-                <tr key={item.id}>
-                  <td>
-                    <strong>{item.outwardDcNumber}</strong>
-                    <small>
-                      {item.poNumber || "Unplanned fabric"} ·{" "}
-                      {shortDate(item.dcIssueDate)}
-                    </small>
-                  </td>
-                  <td>
-                    <strong>{item.fabricName}</strong>
-                    <small>LR {item.lrNumber || "—"}</small>
-                  </td>
-                  <td>
-                    {item.supplierName}
-                    <small>{item.partyName}</small>
-                  </td>
-                  <td>
-                    {item.transportName}
-                    <small>
-                      {item.numberOfBales} bundles · {item.pickedBy}
-                    </small>
-                  </td>
-                  <td>{item.destinationJobworkerName}</td>
-                  <td>
-                    {item.fabricQuantity.toLocaleString("en-IN")} m
-                    <small>
-                      {state.user.role === "admin" ? rupees(item.value) : ""}
-                    </small>
-                  </td>
-                  <td>
-                    <Badge>
-                      {item.challanId
-                        ? challanById.get(item.challanId)?.status || item.stage
-                        : item.stage}
-                    </Badge>
-                    {item.challanId &&
-                      !["Acknowledged", "Void", "Returned"].includes(
-                        challanById.get(item.challanId)?.status || "",
-                      ) && (
-                        <button
-                          className="text-link"
-                          onClick={async () => {
-                            const status = window.prompt(
-                              "Next status: Picked Up, Delivered, or Acknowledged",
-                              challanById.get(item.challanId!)?.status ||
-                                "Issued",
-                            );
-                            if (!status) return;
-                            await mutate("challanStatus", {
-                              id: item.challanId,
-                              status,
-                            });
-                          }}
-                        >
-                          Update
-                        </button>
-                      )}
-                  </td>
-                  <td>
-                    {item.challanId && (
-                      <Link
-                        className="icon-button"
-                        aria-label={`Print ${item.outwardDcNumber}`}
-                        href={`/delivery-challan/${item.challanId}`}
-                      >
-                        <Printer size={16} />
-                      </Link>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </Table>
-          ) : (
-            <Empty title="No transport records found" />
-          )}
-          <Pager
-            total={movements.length}
-            page={visible.page}
-            setPage={setPage}
-          />
-        </section>
-      </>
-    );
-  }
   if (view === "production") {
     const work = state.workOrders.filter(
       (item) =>
@@ -1321,76 +1025,6 @@ function NewWorkOrder({ state, mutate }: { state: State; mutate: Mutate }) {
   );
 }
 
-function NewFabricOrder({ state, mutate }: { state: State; mutate: Mutate }) {
-  const [open, setOpen] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await mutate(
-      "fabricOrder",
-      Object.fromEntries(new FormData(event.currentTarget)),
-    );
-    event.currentTarget.reset();
-    setOpen(false);
-  }
-  return (
-    <section className="panel quick-create">
-      <div className="row-between">
-        <div>
-          <span className="eyebrow">PURCHASING</span>
-          <h3>Create a fabric PO</h3>
-        </div>
-        <button
-          className="button secondary small"
-          onClick={() => setOpen(!open)}
-        >
-          {open ? "Close" : "New fabric order"}
-        </button>
-      </div>
-      {open && (
-        <form className="inline-create" onSubmit={submit}>
-          <select name="fabricSpecId" required defaultValue="">
-            <option value="" disabled>
-              Select fabric
-            </option>
-            {state.fabricSpecs.map((spec) => (
-              <option value={spec.id} key={spec.id}>
-                {spec.name}
-              </option>
-            ))}
-          </select>
-          <input type="date" name="orderDate" required />
-          <input type="date" name="deliveryDate" required />
-          <input name="fabricType" required placeholder="Fabric type" />
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
-            name="pricePerMetre"
-            required
-            placeholder="Price per metre"
-          />
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
-            name="quantityOrdered"
-            required
-            placeholder="Quantity (m)"
-          />
-          <input name="designs" required placeholder="Designs" />
-          <input name="colors" required placeholder="Colors" />
-          <input name="purposeParty" required placeholder="Purpose / party" />
-          <input name="fabricFor" required placeholder="Fabric for" />
-          <input name="remarks" placeholder="Remarks (optional)" />
-          <button className="button primary" type="submit">
-            Create PO
-          </button>
-        </form>
-      )}
-    </section>
-  );
-}
-
 function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
   const [open, setOpen] = useState(false);
   const [fabricOrderId, setFabricOrderId] = useState("");
@@ -1399,6 +1033,10 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
   const [partyId, setPartyId] = useState("");
   const [fabricQuantity, setFabricQuantity] = useState("");
   const [pricePerMetre, setPricePerMetre] = useState("");
+  const [transporterId, setTransporterId] = useState("");
+  const [driverId, setDriverId] = useState("");
+  const [driverName, setDriverName] = useState("");
+  const [driverPhone, setDriverPhone] = useState("");
   const partners = (
     role: "supplier" | "distributor" | "jobworker" | "transporter",
   ) =>
@@ -1422,10 +1060,9 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
     setFabricName(order.fabricName);
     setSupplierId(order.supplierId);
     setPartyId(order.partyIds?.[0] || "");
-    const remaining = Math.max(
-      0,
-      order.quantityOrdered - order.receivedMetres - order.cancelledMetres,
-    );
+    const dispatched = state.transports.filter((item) => item.fabricOrderId === order.id && !["Void", "Returned"].includes(item.stage)).reduce((sum, item) => sum + item.fabricQuantity, 0);
+    const sold = state.movements.filter((item) => item.fabricOrderId === order.id && item.type === "Direct sale").reduce((sum, item) => sum - item.quantity / 1000, 0);
+    const remaining = Math.max(0, order.receivedMetres - dispatched - sold);
     setFabricQuantity(String(Math.round(remaining * 1000) / 1000));
     setPricePerMetre(String(order.pricePerMetre));
   }
@@ -1437,6 +1074,10 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
     );
     event.currentTarget.reset();
     selectOrder("");
+    setTransporterId("");
+    setDriverId("");
+    setDriverName("");
+    setDriverPhone("");
     setOpen(false);
   }
   return (
@@ -1523,7 +1164,17 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
               </option>
             ))}
           </select>
-          <select name="transporterId" required defaultValue="">
+          <select
+            name="transporterId"
+            required
+            value={transporterId}
+            onChange={(event) => {
+              setTransporterId(event.target.value);
+              setDriverId("");
+              setDriverName("");
+              setDriverPhone("");
+            }}
+          >
             <option value="" disabled>
               Transporter
             </option>
@@ -1533,8 +1184,47 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
               </option>
             ))}
           </select>
-          <input name="pickedBy" required placeholder="Picked by / driver" />
-          <input name="driverPhone" placeholder="Driver phone" />
+          <select
+            name="pickedByPersonId"
+            value={driverId}
+            onChange={(event) => {
+              const id = event.target.value;
+              setDriverId(id);
+              const person = state.people.find((item) => item.id === id);
+              setDriverName(person?.name || "");
+              setDriverPhone(person?.phone || "");
+            }}
+          >
+            <option value="">+ Enter a new driver / pickup person</option>
+            {state.people
+              .filter(
+                (person) =>
+                  ["driver", "pickup", "delivery"].includes(person.role) &&
+                  (!person.organizationId ||
+                    person.organizationId === transporterId),
+              )
+              .map((person) => (
+                <option key={person.id} value={person.id}>
+                  {person.name}
+                </option>
+              ))}
+          </select>
+          <input
+            name="pickedBy"
+            required
+            value={driverName}
+            onChange={(event) => {
+              setDriverId("");
+              setDriverName(event.target.value);
+            }}
+            placeholder="Picked by / driver"
+          />
+          <input
+            name="driverPhone"
+            value={driverPhone}
+            onChange={(event) => setDriverPhone(event.target.value)}
+            placeholder="Driver phone"
+          />
           <input name="lrNumber" placeholder="LR number" />
           <input type="date" name="lrDate" />
           <input
@@ -1593,6 +1283,7 @@ function WorkbookSync({
         sheet: string;
         rowNumber: number;
         severity: string;
+        code: string;
         message: string;
       }[];
       conflicts: {
@@ -1605,7 +1296,12 @@ function WorkbookSync({
     } | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
+    [repairValues, setRepairValues] = useState<Record<string, string>>({}),
+    [ignoreIncomplete, setIgnoreIncomplete] = useState(false),
     [resetOpen, setResetOpen] = useState(false);
+  const incomplete = preview?.issues.filter(
+    (issue) => issue.code === "REQUIRED_FIELD",
+  ) || [];
   const latest = useMemo(
     () =>
       state.syncRuns
@@ -1630,6 +1326,8 @@ function WorkbookSync({
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       setPreview(result);
+      setRepairValues({});
+      setIgnoreIncomplete(false);
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : "Could not preview workbook",
@@ -1648,7 +1346,7 @@ function WorkbookSync({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: "{}",
+          body: JSON.stringify({ ignoreIncomplete }),
         },
       );
       const result = await response.json();
@@ -1660,6 +1358,50 @@ function WorkbookSync({
       setError(
         reason instanceof Error ? reason.message : "Could not commit workbook",
       );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function repair(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!preview) return;
+    const repairs = incomplete.flatMap((issue) => {
+      const fields = Object.fromEntries(
+        issue.message
+          .split(": ")[1]
+          .split(", ")
+          .map((field) => [
+            field,
+            repairValues[`${issue.sheet}:${issue.rowNumber}:${field}`]?.trim(),
+          ])
+          .filter((entry) => entry[1]),
+      );
+      return Object.keys(fields).length
+        ? [{ sheet: issue.sheet, rowNumber: issue.rowNumber, fields }]
+        : [];
+    });
+    if (!repairs.length) {
+      setError("Enter at least one missing value to recheck the workbook.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/sync/workbook/${preview.runId}/repair`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repairs }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      setPreview(result);
+      setRepairValues({});
+      setIgnoreIncomplete(false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not recheck workbook");
     } finally {
       setBusy(false);
     }
@@ -1704,6 +1446,8 @@ function WorkbookSync({
             onChange={(event) => {
               setFile(event.target.files?.[0] || null);
               setPreview(null);
+              setRepairValues({});
+              setIgnoreIncomplete(false);
             }}
           />
         </label>
@@ -1726,8 +1470,8 @@ function WorkbookSync({
           <SectionTitle
             title={`${preview.mode === "replace" ? "Initial replacement" : "Two-way sync"} preview`}
           >
-            Valid rows can be committed; malformed rows remain visible in the
-            exception queue.
+            Fill missing values here, or explicitly skip incomplete rows. Skipped
+            rows stay visible in the import issue queue with their original values.
           </SectionTitle>
           <div className="sync-counts">
             {Object.entries(preview.summary).map(([label, value]) => (
@@ -1782,7 +1526,7 @@ function WorkbookSync({
           )}
           {preview.issues.length > 0 && (
             <div className="issue-list">
-              {preview.issues.slice(0, 12).map((issue, index) => (
+              {preview.issues.filter((issue) => issue.code !== "REQUIRED_FIELD").slice(0, 12).map((issue, index) => (
                 <p key={`${issue.sheet}-${issue.rowNumber}-${index}`}>
                   <Badge tone={issue.severity === "error" ? "red" : "amber"}>
                     {issue.severity}
@@ -1795,8 +1539,60 @@ function WorkbookSync({
               ))}
             </div>
           )}
-          <button className="button primary" disabled={busy} onClick={commit}>
-            <CheckCircle2 size={16} /> Commit valid rows
+          {incomplete.length ? (
+            <form className="workbook-repairs" onSubmit={repair}>
+              <h3>{incomplete.length} rows need your decision</h3>
+              <p className="muted">
+                Enter any known values and recheck. You may leave other rows for
+                the issue queue.
+              </p>
+              <div className="workbook-repair-list">
+                {incomplete.map((issue) => (
+                  <fieldset key={`${issue.sheet}:${issue.rowNumber}`}>
+                    <legend>{issue.sheet} · row {issue.rowNumber}</legend>
+                    {issue.message.split(": ")[1].split(", ").map((field) => {
+                      const key = `${issue.sheet}:${issue.rowNumber}:${field}`;
+                      return (
+                        <label key={key}>
+                          {field}
+                          <input
+                            type={field.includes("Date") ? "date" : "text"}
+                            value={repairValues[key] || ""}
+                            onChange={(event) =>
+                              setRepairValues((current) => ({
+                                ...current,
+                                [key]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      );
+                    })}
+                  </fieldset>
+                ))}
+              </div>
+              <button className="button secondary" disabled={busy} type="submit">
+                Recheck entered values
+              </button>
+            </form>
+          ) : null}
+          {incomplete.length ? (
+            <label className="workbook-skip-choice">
+              <input
+                type="checkbox"
+                checked={ignoreIncomplete}
+                onChange={(event) => setIgnoreIncomplete(event.target.checked)}
+              />
+              Import valid rows and skip the {incomplete.length} incomplete rows
+            </label>
+          ) : null}
+          <button
+            className="button primary"
+            disabled={busy || (incomplete.length > 0 && !ignoreIncomplete)}
+            onClick={commit}
+          >
+            <CheckCircle2 size={16} />
+            {incomplete.length ? "Import valid rows and keep issues" : "Commit validated rows"}
           </button>
         </section>
       )}
