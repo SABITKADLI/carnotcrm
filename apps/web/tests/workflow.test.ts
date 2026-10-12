@@ -302,6 +302,50 @@ test("fabric PO status, receipts, and linked delivery challans reconcile quantit
   });
   assert.equal(get("fabricOrders", po.id).cancelledMetres, 60);
 });
+test("partner master accepts coolies and manual PO entry creates reusable master data", () => {
+  const coolie = run<Organization>("organization", {
+    name: "Warehouse Coolie One",
+    roles: ["coolie"],
+    phone: "9999999999",
+  });
+  assert.deepEqual(coolie.roles, ["coolie"]);
+
+  const po = run<FabricOrder>("fabricOrder", {
+    fabricSpecId: "__new__",
+    fabricName: "Manual Poplin",
+    internalItemName: "Summer Range",
+    width: "58",
+    folding: "Open",
+    content: "100% Cotton",
+    weave: "Plain",
+    construction: "120x80",
+    threadCount: "40s",
+    supplierId: "__new__",
+    newSupplierName: "Manual Mill",
+    agentId: "__new__",
+    newAgentName: "Manual Agent",
+    newPartyName: "Manual Party",
+    orderDate: "2026-10-12",
+    deliveryDate: "2026-10-30",
+    fabricType: "Shirting",
+    pricePerMetre: 135,
+    quantityOrdered: 80,
+    designs: "2",
+    colors: "3",
+    fabricFor: "Garment",
+  });
+  assert.equal(po.fabricName, "Manual Poplin");
+  assert.equal(po.supplierName, "Manual Mill");
+  assert.equal(po.agentName, "Manual Agent");
+  assert.equal(po.purposeParty, "Manual Party");
+  assert.ok(all("fabricSpecs").some((item) => item.name === "Manual Poplin"));
+  assert.ok(
+    all("organizations").some(
+      (item) =>
+        item.name === "Manual Party" && item.roles.includes("distributor"),
+    ),
+  );
+});
 test("operational workflow crosses PO, transport, production, cleared lots, finished goods, and billing", () => {
   const partner = (
     name: string,

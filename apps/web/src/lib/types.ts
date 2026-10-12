@@ -235,6 +235,7 @@ export type OrganizationRole =
   | "agent"
   | "jobworker"
   | "transporter"
+  | "coolie"
   | "distributor"
   | "customer"
   | "legal_entity";
@@ -593,11 +594,8 @@ export const money = (amount: number, currency = "INR") =>
   }).format(amount / 100);
 export const meters = (mm: number) =>
   `${(mm / 1000).toLocaleString("en-IN", { maximumFractionDigits: 3 })} m`;
-export const shortDate = (date: string) =>
-  date
-    ? new Date(date.slice(0, 10) + "T12:00:00").toLocaleDateString("en-IN", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })
-    : "—";
+export const shortDate = (date: string) => {
+  if (!date) return "—";
+  const match = date.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : date;
+};

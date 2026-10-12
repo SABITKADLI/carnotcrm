@@ -252,13 +252,14 @@ export function Workspace({
     if (action === "changePassword") {
       router.replace("/login");
       router.refresh();
-      return;
+      return result.result;
     }
     setToast(
       action === "shopify"
         ? "Shopify listing updated"
         : "Changes saved to your workspace",
     );
+    return result.result;
   }
   async function logout() {
     await fetch("/api/auth", {
@@ -270,9 +271,7 @@ export function Workspace({
     router.refresh();
   }
   const tailor = ["tailor", "jobworker"].includes(state.user.role);
-  const nav = navigation.filter(
-    (n) => canAccessView(state.user.role, n.id),
-  );
+  const nav = navigation.filter((n) => canAccessView(state.user.role, n.id));
   const total = state.jobs.reduce((s, j) => s + j.quantity, 0),
     finished = state.jobs.reduce((s, j) => s + j.finished, 0);
   const primary = state.user.role === "admin" ? actions[view] : undefined;

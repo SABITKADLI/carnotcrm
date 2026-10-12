@@ -2564,7 +2564,9 @@ td small,
   padding: 17px;
   border: 1px solid var(--line);
   background: var(--surface);
-  transition: border-color 150ms ease, transform 150ms ease;
+  transition:
+    border-color 150ms ease,
+    transform 150ms ease;
 }
 .guide-flow li > a:hover {
   border-color: var(--accent);
@@ -2923,6 +2925,165 @@ td small,
 .quick-create {
   margin-bottom: 24px;
 }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+  background: rgba(24, 31, 28, 0.5);
+  backdrop-filter: blur(4px);
+}
+.nested-modal {
+  z-index: 110;
+}
+.form-modal {
+  width: min(760px, 96vw);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 28px 90px rgba(27, 35, 31, 0.28);
+  animation: modal-in 180ms ease-out;
+}
+.po-modal {
+  width: min(920px, 96vw);
+}
+.success-modal {
+  width: min(440px, 94vw);
+  padding: 34px;
+  text-align: center;
+}
+.success-modal h2 {
+  margin: 10px 0;
+  font-family: var(--font-display), serif;
+  font-size: 40px;
+  font-weight: 400;
+}
+.success-modal p {
+  margin: 0 0 24px;
+  color: var(--muted);
+}
+@keyframes modal-in {
+  from {
+    transform: translateY(12px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+.modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+  backdrop-filter: blur(12px);
+}
+.modal-header h2 {
+  margin: 5px 0;
+  font-family: var(--font-display), serif;
+  font-size: 30px;
+  font-weight: 400;
+}
+.modal-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sectioned-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding: 24px 28px 30px;
+}
+.form-section {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 84%, var(--paper));
+}
+.form-section legend {
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+.form-section label {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.form-section input,
+.form-section select,
+.form-section textarea {
+  width: 100%;
+}
+.form-section textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.selection-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+.selection-summary > div {
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  background: var(--surface);
+}
+.selection-summary span,
+.choice-card small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.selection-summary strong {
+  font-size: 12px;
+}
+.choice-card {
+  grid-template-columns: auto 1fr !important;
+  align-items: start !important;
+  padding: 13px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  cursor: pointer;
+}
+.choice-card input {
+  width: auto;
+  margin-top: 3px;
+}
+.choice-card span {
+  display: grid;
+  gap: 4px;
+}
+.choice-card strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
 .pagination {
   display: flex;
   align-items: center;
@@ -3150,7 +3311,9 @@ td small,
   letter-spacing: 0.04em;
   opacity: 0;
   transform: translateY(4px);
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 .attachment-document > span {
   position: static;
@@ -3517,8 +3680,24 @@ td small,
 }
 @media (max-width: 700px) {
   .inline-create,
-  .sync-counts {
+  .sync-counts,
+  .sectioned-form,
+  .form-section,
+  .selection-summary {
     grid-template-columns: 1fr;
+  }
+  .modal-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+  .form-modal {
+    width: 100%;
+    max-height: 94vh;
+  }
+  .modal-header,
+  .sectioned-form {
+    padding-left: 20px;
+    padding-right: 20px;
   }
   .challan-document {
     width: auto;

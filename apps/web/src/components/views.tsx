@@ -1013,15 +1013,7 @@ function Overview({
               return (
                 <button key={o.id} onClick={() => show(o)}>
                   <div className="due-date">
-                    <strong>
-                      {new Date(o.dueDate + "T12:00:00").getDate()}
-                    </strong>
-                    <span>
-                      {new Date(o.dueDate + "T12:00:00").toLocaleDateString(
-                        "en",
-                        { month: "short" },
-                      )}
-                    </span>
+                    <strong>{shortDate(o.dueDate)}</strong>
                   </div>
                   <div className="due-order">
                     <strong>{o.name}</strong>

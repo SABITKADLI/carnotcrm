@@ -542,9 +542,7 @@ function perform(user: User, action: string, input: Input): unknown {
     );
     const status = str(input.status, 100);
     const availableStatuses = all("referenceValues")
-      .filter(
-        (item) => item.category === "production_status" && item.active,
-      )
+      .filter((item) => item.category === "production_status" && item.active)
       .map((item) => item.value);
     if (
       availableStatuses.length &&
@@ -709,6 +707,7 @@ function perform(user: User, action: string, input: Input): unknown {
             "agent",
             "jobworker",
             "transporter",
+            "coolie",
             "distributor",
             "customer",
             "legal_entity",
@@ -849,7 +848,70 @@ function perform(user: User, action: string, input: Input): unknown {
       return updated;
     }
     case "fabricOrder": {
-      const spec = get("fabricSpecs", str(input.fabricSpecId));
+      const manualSpec = input.fabricSpecId === "__new__";
+      const createOrganization = (
+        idValue: unknown,
+        nameValue: unknown,
+        role: "supplier" | "agent" | "distributor",
+      ) => {
+        const id = optional(idValue, 100);
+        if (id && id !== "__new__") return get("organizations", id);
+        const name = optional(nameValue, 160);
+        if (!name) return undefined;
+        const existing = all("organizations").find(
+          (item) =>
+            !item.archived &&
+            item.name.trim().toLowerCase() === name.trim().toLowerCase(),
+        );
+        if (existing) {
+          if (!existing.roles.includes(role))
+            return put("organizations", {
+              ...existing,
+              roles: [...existing.roles, role],
+              version: existing.version + 1,
+            });
+          return existing;
+        }
+        return put("organizations", {
+          ...base("org"),
+          version: 1,
+          name,
+          roles: [role],
+          email: "",
+          phone: "",
+          address: "",
+          taxId: "",
+          notes: "Created while entering a fabric PO",
+        });
+      };
+      const manualSupplier = manualSpec
+        ? createOrganization(
+            input.supplierId,
+            input.newSupplierName,
+            "supplier",
+          )
+        : undefined;
+      if (manualSpec && !manualSupplier)
+        throw new Error("Choose a supplier or enter a new supplier name");
+      const manualAgent = manualSpec
+        ? createOrganization(input.agentId, input.newAgentName, "agent")
+        : undefined;
+      const spec = manualSpec
+        ? put("fabricSpecs", {
+            ...base("fs"),
+            version: 1,
+            name: str(input.fabricName, 160),
+            rangeName: optional(input.internalItemName, 150),
+            width: str(input.width, 50),
+            folding: str(input.folding, 100),
+            weave: optional(input.weave, 100),
+            threadCount: optional(input.threadCount, 100),
+            construction: optional(input.construction, 160),
+            content: str(input.content, 160),
+            supplierId: manualSupplier!.id,
+            agentId: manualAgent?.id,
+          })
+        : get("fabricSpecs", str(input.fabricSpecId));
       const supplier = get("organizations", spec.supplierId);
       const poNumbers = all("fabricOrders").map((order) =>
         Number(order.poNumber.match(/(\d+)$/)?.[1] || 0),
@@ -863,11 +925,21 @@ function perform(user: User, action: string, input: Input): unknown {
         ? get("organizations", spec.agentId).name
         : "";
       const partyIds = Array.isArray(input.partyIds)
-        ? input.partyIds.map((value) => str(value, 100))
+        ? input.partyIds
+            .map((value) => str(value, 100))
+            .filter((value) => value !== "__new__")
         : [];
+      const newParty = createOrganization(
+        "__new__",
+        input.newPartyName,
+        "distributor",
+      );
+      if (newParty) partyIds.push(newParty.id);
       const purposeParty = partyIds.length
         ? partyIds.map((id) => get("organizations", id).name).join(", ")
-        : str(input.purposeParty, 500);
+        : optional(input.purposeParty, 500);
+      if (!purposeParty)
+        throw new Error("Choose a customer / party or enter a new one");
       const order = put("fabricOrders", {
         ...base("fpo"),
         version: 1,
@@ -1703,9 +1775,13 @@ function perform(user: User, action: string, input: Input): unknown {
           "Delivery accounts must link to a driver, pickup, or delivery person",
         );
       if (
-        ["supplier", "agent", "transporter", "jobworker", "distributor"].includes(
-          role,
-        )
+        [
+          "supplier",
+          "agent",
+          "transporter",
+          "jobworker",
+          "distributor",
+        ].includes(role)
       ) {
         if (!linkedOrganization)
           throw new Error(`${role} accounts must link to an organization`);

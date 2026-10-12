@@ -10,7 +10,7 @@ export interface EditRequest {
 export type Mutate = (
   action: string,
   input: Record<string, unknown>,
-) => Promise<void>;
+) => Promise<unknown>;
 type FieldDef = {
   key: string;
   label: string;
@@ -347,11 +347,7 @@ export function Editor({
         "admin",
       ]),
       {
-        ...select(
-          "partnerId",
-          "Linked partner record",
-          linkedPartnerOptions,
-        ),
+        ...select("partnerId", "Linked partner record", linkedPartnerOptions),
         required: false,
         hint: "Required for partner accounts. Delivery access should link to a person; other partner roles link to an organization. Administrators leave this blank.",
       },

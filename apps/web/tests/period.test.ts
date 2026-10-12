@@ -5,6 +5,7 @@ import {
   inPeriod,
   periodBounds,
 } from "../src/lib/period";
+import { shortDate } from "../src/lib/types";
 
 test("period filters support rolling presets, custom ranges, and Indian financial years", () => {
   const now = new Date("2026-09-30T12:00:00Z");
@@ -20,11 +21,20 @@ test("period filters support rolling presets, custom ranges, and Indian financia
     start: "2026-07-01",
     end: "2026-09-30",
   });
-  assert.deepEqual(periodBounds("custom", "", "", now, "2026-05-12", "2026-06-08"), {
-    start: "2026-05-12",
-    end: "2026-06-08",
-  });
+  assert.deepEqual(
+    periodBounds("custom", "", "", now, "2026-05-12", "2026-06-08"),
+    {
+      start: "2026-05-12",
+      end: "2026-06-08",
+    },
+  );
   assert.ok(inPeriod("2027-03-31", "fy", "", "2026-27", now));
   assert.ok(!inPeriod("2027-04-01", "fy", "", "2026-27", now));
   assert.equal(currentFinancialYear(now), "2026-27");
+});
+
+test("display dates use day/month/year consistently", () => {
+  assert.equal(shortDate("2026-10-12"), "12/10/2026");
+  assert.equal(shortDate("2026-10-12T14:30:00.000Z"), "12/10/2026");
+  assert.equal(shortDate(""), "—");
 });

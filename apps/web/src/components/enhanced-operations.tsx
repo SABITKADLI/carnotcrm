@@ -14,11 +14,12 @@ import {
   X,
 } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
-import type {
-  FabricOrder,
-  Organization,
-  OrganizationRole,
-  State,
+import {
+  shortDate,
+  type FabricOrder,
+  type Organization,
+  type OrganizationRole,
+  type State,
 } from "@/lib/types";
 import {
   currentFinancialYear,
@@ -66,12 +67,14 @@ export function usePeriodSelection(initial: OperationFilters = {}) {
   const [fy, setFy] = useState(initial.fy || currentFinancialYear());
   const now = new Date(),
     defaultEnd = now.toISOString().slice(0, 10),
-    defaultStart = new Date(now.getFullYear(), now.getMonth() - 2, now.getDate())
+    defaultStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - 2,
+      now.getDate(),
+    )
       .toISOString()
       .slice(0, 10);
-  const [customStart, setCustomStart] = useState(
-    initial.start || defaultStart,
-  );
+  const [customStart, setCustomStart] = useState(initial.start || defaultStart);
   const [customEnd, setCustomEnd] = useState(initial.end || defaultEnd);
   return {
     mode,
@@ -139,7 +142,8 @@ export function PeriodBar({
                 key={year}
                 value={`${year}-${String(year + 1).slice(-2)}`}
               >
-                FY {year}–{String(year + 1).slice(-2)} · 1 Apr {year}–31 Mar {year + 1}
+                FY {year}–{String(year + 1).slice(-2)} · 1 Apr {year}–31 Mar{" "}
+                {year + 1}
               </option>
             ))}
           </select>
@@ -397,7 +401,366 @@ export function EnhancedDashboard({
 function parties(state: State) {
   return state.organizations.filter(
     (organization) =>
-      !organization.archived && organization.roles.includes("distributor"),
+      !organization.archived &&
+      organization.roles.some((role) =>
+        ["distributor", "customer"].includes(role),
+      ),
+  );
+}
+
+const uniqueValues = (values: string[]) =>
+  [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort(
+    (left, right) => left.localeCompare(right),
+  );
+
+function expectedPoNumber(orders: FabricOrder[]) {
+  const next =
+    Math.max(
+      0,
+      ...orders.map((order) =>
+        Number(order.poNumber.match(/(\d+)$/)?.[1] || 0),
+      ),
+    ) + 1;
+  return `PO2627/${String(next).padStart(3, "0")}`;
+}
+
+function NewFabricOrderModal({
+  state,
+  mutate,
+  close,
+  created,
+}: {
+  state: State;
+  mutate: Mutate;
+  close: () => void;
+  created: (poNumber: string) => void;
+}) {
+  const [specId, setSpecId] = useState("");
+  const [supplierId, setSupplierId] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const selectedSpec = state.fabricSpecs.find((item) => item.id === specId);
+  const selectedSupplier = selectedSpec
+    ? state.organizations.find((item) => item.id === selectedSpec.supplierId)
+    : undefined;
+  const selectedAgent = selectedSpec?.agentId
+    ? state.organizations.find((item) => item.id === selectedSpec.agentId)
+    : undefined;
+  const manual = specId === "__new__";
+  const suppliers = state.organizations.filter(
+    (item) =>
+      !item.archived &&
+      item.roles.some((role) => role === "supplier" || role === "vendor"),
+  );
+  const agents = state.organizations.filter(
+    (item) => !item.archived && item.roles.includes("agent"),
+  );
+  const suggestions = {
+    fabricTypes: uniqueValues(
+      state.fabricOrders.map((item) => item.fabricType),
+    ),
+    designs: uniqueValues(state.fabricOrders.map((item) => item.designs)),
+    colors: uniqueValues(state.fabricOrders.map((item) => item.colors)),
+    fabricFor: uniqueValues(state.fabricOrders.map((item) => item.fabricFor)),
+  };
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      const form = new FormData(event.currentTarget);
+      const result = (await mutate("fabricOrder", {
+        ...Object.fromEntries(form),
+        partyIds: form.getAll("partyIds"),
+      })) as FabricOrder;
+      created(result.poNumber);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  return (
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => event.target === event.currentTarget && close()}
+    >
+      <section
+        className="form-modal po-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-po-title"
+      >
+        <header className="modal-header">
+          <div>
+            <span className="eyebrow">FABRIC PURCHASE ORDER</span>
+            <h2 id="new-po-title">
+              Create {expectedPoNumber(state.fabricOrders)}
+            </h2>
+            <p>The final PO number is confirmed when this form is saved.</p>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close new PO"
+            onClick={close}
+          >
+            <X size={19} />
+          </button>
+        </header>
+        <form className="sectioned-form" onSubmit={submit}>
+          <fieldset className="form-section span-all">
+            <legend>1. Fabric and specification</legend>
+            <label className="span-all">
+              Choose an existing fabric or add a new one
+              <select
+                name="fabricSpecId"
+                required
+                value={specId}
+                onChange={(event) => setSpecId(event.target.value)}
+              >
+                <option value="" disabled>
+                  Select fabric specification
+                </option>
+                {state.fabricSpecs.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} ·{" "}
+                    {state.organizations.find(
+                      (org) => org.id === item.supplierId,
+                    )?.name || "Unknown supplier"}
+                  </option>
+                ))}
+                <option value="__new__">+ Add a new fabric manually</option>
+              </select>
+            </label>
+            {selectedSpec ? (
+              <div className="selection-summary span-all">
+                <div>
+                  <span>Fabric</span>
+                  <strong>{selectedSpec.name}</strong>
+                </div>
+                <div>
+                  <span>Supplier</span>
+                  <strong>{selectedSupplier?.name || "—"}</strong>
+                </div>
+                <div>
+                  <span>Agent</span>
+                  <strong>{selectedAgent?.name || "No agent"}</strong>
+                </div>
+                <div>
+                  <span>Width / folding</span>
+                  <strong>
+                    {selectedSpec.width}&quot; · {selectedSpec.folding}
+                  </strong>
+                </div>
+                <div>
+                  <span>Content</span>
+                  <strong>{selectedSpec.content}</strong>
+                </div>
+                <div>
+                  <span>Construction</span>
+                  <strong>{selectedSpec.construction || "—"}</strong>
+                </div>
+              </div>
+            ) : null}
+            {manual ? (
+              <>
+                <label>
+                  Fabric name
+                  <input name="fabricName" required />
+                </label>
+                <label>
+                  Internal / range name
+                  <input name="internalItemName" />
+                </label>
+                <label>
+                  Width
+                  <input name="width" required />
+                </label>
+                <label>
+                  Folding
+                  <input name="folding" required />
+                </label>
+                <label>
+                  Content
+                  <input name="content" required />
+                </label>
+                <label>
+                  Weave
+                  <input name="weave" />
+                </label>
+                <label>
+                  Construction
+                  <input name="construction" />
+                </label>
+                <label>
+                  Thread count
+                  <input name="threadCount" />
+                </label>
+                <label>
+                  Supplier
+                  <select
+                    name="supplierId"
+                    required={supplierId !== "__new__"}
+                    value={supplierId}
+                    onChange={(event) => setSupplierId(event.target.value)}
+                  >
+                    <option value="" disabled>
+                      Select supplier
+                    </option>
+                    {suppliers.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                    <option value="__new__">+ Add supplier manually</option>
+                  </select>
+                </label>
+                {supplierId === "__new__" ? (
+                  <label>
+                    New supplier name
+                    <input name="newSupplierName" required />
+                  </label>
+                ) : null}
+                <label>
+                  Agent (optional)
+                  <select
+                    name="agentId"
+                    value={agentId}
+                    onChange={(event) => setAgentId(event.target.value)}
+                  >
+                    <option value="">No agent</option>
+                    {agents.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                    <option value="__new__">+ Add agent manually</option>
+                  </select>
+                </label>
+                {agentId === "__new__" ? (
+                  <label>
+                    New agent name
+                    <input name="newAgentName" required />
+                  </label>
+                ) : null}
+              </>
+            ) : null}
+          </fieldset>
+          <fieldset className="form-section span-all">
+            <legend>2. Dates and purpose</legend>
+            <label>
+              Order date
+              <input
+                name="orderDate"
+                type="date"
+                required
+                defaultValue={new Date().toISOString().slice(0, 10)}
+              />
+            </label>
+            <label>
+              Expected delivery date
+              <input name="deliveryDate" type="date" required />
+            </label>
+            <label className="span-all multi-field">
+              Customer / party
+              <select name="partyIds" multiple>
+                {parties(state).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              <small>
+                Hold Ctrl (Windows) or Command (Mac) to select more than one.
+              </small>
+            </label>
+            <label className="span-all">
+              Or add a new customer / party manually
+              <input
+                name="newPartyName"
+                placeholder="Leave blank when an existing party is selected"
+              />
+            </label>
+            <label>
+              Fabric for
+              <input name="fabricFor" list="fabric-for-options" required />
+            </label>
+            <datalist id="fabric-for-options">
+              {suggestions.fabricFor.map((value) => (
+                <option key={value} value={value} />
+              ))}
+            </datalist>
+          </fieldset>
+          <fieldset className="form-section span-all">
+            <legend>3. Order quantities and commercial details</legend>
+            <label>
+              Fabric type
+              <input name="fabricType" list="fabric-type-options" required />
+            </label>
+            <datalist id="fabric-type-options">
+              {suggestions.fabricTypes.map((value) => (
+                <option key={value} value={value} />
+              ))}
+            </datalist>
+            <label>
+              Price per metre (₹)
+              <input
+                name="pricePerMetre"
+                type="number"
+                min="0.01"
+                step="0.01"
+                required
+              />
+            </label>
+            <label>
+              Quantity (metres)
+              <input
+                name="quantityOrdered"
+                type="number"
+                min="0.001"
+                step="0.001"
+                required
+              />
+            </label>
+            <label>
+              Designs
+              <input name="designs" list="design-options" required />
+            </label>
+            <datalist id="design-options">
+              {suggestions.designs.map((value) => (
+                <option key={value} value={value} />
+              ))}
+            </datalist>
+            <label>
+              Colours
+              <input name="colors" list="color-options" required />
+            </label>
+            <datalist id="color-options">
+              {suggestions.colors.map((value) => (
+                <option key={value} value={value} />
+              ))}
+            </datalist>
+            <label className="span-all">
+              Remarks
+              <textarea name="remarks" />
+            </label>
+          </fieldset>
+          <div className="modal-actions span-all">
+            <button className="button secondary" type="button" onClick={close}>
+              Cancel
+            </button>
+            <button
+              className="button primary"
+              type="submit"
+              disabled={submitting || !specId}
+            >
+              {submitting
+                ? "Creating…"
+                : `Create ${expectedPoNumber(state.fabricOrders)}`}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -418,6 +781,7 @@ export function EnhancedFabricOrders({
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState(filters.open || "");
   const [createOpen, setCreateOpen] = useState(false);
+  const [createdPoNumber, setCreatedPoNumber] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [urlStatus] = useState(filters.status || "");
@@ -436,16 +800,6 @@ export function EnhancedFabricOrders({
   });
   const selected = state.fabricOrders.find((order) => order.id === selectedId);
   const visible = orders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  async function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await mutate("fabricOrder", {
-      ...Object.fromEntries(form),
-      partyIds: form.getAll("partyIds"),
-    });
-    event.currentTarget.reset();
-    setCreateOpen(false);
-  }
   return (
     <>
       <PeriodBar period={period} />
@@ -458,76 +812,11 @@ export function EnhancedFabricOrders({
             </div>
             <button
               className="button secondary small"
-              onClick={() => setCreateOpen(!createOpen)}
+              onClick={() => setCreateOpen(true)}
             >
-              <Plus size={15} /> {createOpen ? "Close" : "New PO"}
+              <Plus size={15} /> New PO
             </button>
           </div>
-          {createOpen && (
-            <form className="inline-create" onSubmit={create}>
-              <select name="fabricSpecId" required defaultValue="">
-                <option value="" disabled>
-                  Fabric specification
-                </option>
-                {state.fabricSpecs.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ·{" "}
-                    {
-                      state.organizations.find(
-                        (org) => org.id === item.supplierId,
-                      )?.name
-                    }
-                  </option>
-                ))}
-              </select>
-              <input
-                name="orderDate"
-                type="date"
-                required
-                aria-label="Order date"
-              />
-              <input
-                name="deliveryDate"
-                type="date"
-                required
-                aria-label="Delivery date"
-              />
-              <input name="fabricType" required placeholder="Fabric type" />
-              <input
-                name="pricePerMetre"
-                type="number"
-                min="0.01"
-                step="0.01"
-                required
-                placeholder="Price per metre"
-              />
-              <input
-                name="quantityOrdered"
-                type="number"
-                min="0.001"
-                step="0.001"
-                required
-                placeholder="Quantity metres"
-              />
-              <input name="designs" required placeholder="Designs" />
-              <input name="colors" required placeholder="Colors" />
-              <label className="multi-field">
-                <span>Parties / distributors</span>
-                <select name="partyIds" multiple required>
-                  {parties(state).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <input name="fabricFor" required placeholder="Fabric for" />
-              <input name="remarks" placeholder="Remarks" />
-              <button className="button primary" type="submit">
-                Create PO
-              </button>
-            </form>
-          )}
         </section>
       )}
       <section className="panel operations-panel">
@@ -557,7 +846,8 @@ export function EnhancedFabricOrders({
                     {order.poNumber}
                   </button>
                   <small>
-                    {order.orderDate} · row {order.sourceRow || "Portal"}
+                    {shortDate(order.orderDate)} · row{" "}
+                    {order.sourceRow || "Portal"}
                   </small>
                 </td>
                 <td>
@@ -621,6 +911,40 @@ export function EnhancedFabricOrders({
           setMessage={setMessage}
         />
       )}
+      {createOpen ? (
+        <NewFabricOrderModal
+          state={state}
+          mutate={mutate}
+          close={() => setCreateOpen(false)}
+          created={(poNumber) => {
+            setCreateOpen(false);
+            setCreatedPoNumber(poNumber);
+          }}
+        />
+      ) : null}
+      {createdPoNumber ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="form-modal success-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="po-created-title"
+          >
+            <span className="eyebrow">PURCHASE ORDER CREATED</span>
+            <h2 id="po-created-title">{createdPoNumber}</h2>
+            <p>
+              Use this PO number in your records and supplier communication.
+            </p>
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => setCreatedPoNumber("")}
+            >
+              Done
+            </button>
+          </section>
+        </div>
+      ) : null}
     </>
   );
 }
@@ -647,6 +971,13 @@ function FabricOrderDrawer({
   setMessage: (value: string) => void;
 }) {
   const [tab, setTab] = useState<"details" | "edit" | "receive">("details");
+  const [receiptOpen, setReceiptOpen] = useState(false);
+  const [receiptMode, setReceiptMode] = useState<"full" | "specific">("full");
+  const [specificQuantity, setSpecificQuantity] = useState("");
+  const outstanding = Math.max(
+    0,
+    order.quantityOrdered - order.receivedMetres - order.cancelledMetres,
+  );
   const receipts = state.fabricReceipts.filter(
     (item) => item.fabricOrderId === order.id,
   );
@@ -806,8 +1137,10 @@ function FabricOrderDrawer({
           <div className="drawer-content">
             <div className="detail-grid">
               {Object.entries({
-                "Order date": order.orderDate,
-                "Delivery date": order.deliveryDate || "Legacy – not supplied",
+                "Order date": shortDate(order.orderDate),
+                "Delivery date": order.deliveryDate
+                  ? shortDate(order.deliveryDate)
+                  : "Legacy – not supplied",
                 Supplier: order.supplierName,
                 Agent: order.agentName || "—",
                 Fabric: order.fabricName,
@@ -846,7 +1179,7 @@ function FabricOrderDrawer({
                   <article className="timeline-item" key={item.id}>
                     <strong>
                       {item.quantityMetres.toLocaleString("en-IN")} m ·{" "}
-                      {item.receiptDate}
+                      {shortDate(item.receiptDate)}
                     </strong>
                     <span>
                       {item.warehouse}
@@ -974,7 +1307,8 @@ function FabricOrderDrawer({
                   <span>
                     {new Date(note.date).toLocaleString("en-IN", {
                       timeZone: "Asia/Kolkata",
-                    })} · {note.note}
+                    })}{" "}
+                    · {note.note}
                   </span>
                 </article>
               ))}
@@ -1002,16 +1336,11 @@ function FabricOrderDrawer({
                   Mark ordered
                 </button>
                 <button
-                  className="button secondary small"
-                  onClick={() => status("Partial")}
+                  className="button primary small"
+                  onClick={() => setReceiptOpen(true)}
+                  disabled={outstanding <= 0}
                 >
-                  Mark partial
-                </button>
-                <button
-                  className="button secondary small"
-                  onClick={() => status("Received")}
-                >
-                  Mark received
+                  {outstanding > 0 ? "Mark received" : "Fully received"}
                 </button>
                 <button
                   className="button secondary small"
@@ -1261,6 +1590,206 @@ function FabricOrderDrawer({
           </form>
         )}
       </aside>
+      {receiptOpen ? (
+        <div
+          className="modal-backdrop nested-modal"
+          role="presentation"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget && setReceiptOpen(false)
+          }
+        >
+          <section
+            className="form-modal receipt-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="receipt-title"
+          >
+            <header className="modal-header">
+              <div>
+                <span className="eyebrow">RECEIVE FABRIC</span>
+                <h2 id="receipt-title">{order.poNumber}</h2>
+                <p>
+                  {outstanding.toLocaleString("en-IN")} m remains to be
+                  received.
+                </p>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close receipt"
+                onClick={() => setReceiptOpen(false)}
+              >
+                <X size={19} />
+              </button>
+            </header>
+            <form
+              className="sectioned-form"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                const form = new FormData(event.currentTarget);
+                const quantityMetres =
+                  receiptMode === "full"
+                    ? outstanding
+                    : Number(specificQuantity);
+                await mutate("fabricReceipt", {
+                  fabricOrderId: order.id,
+                  ...Object.fromEntries(form),
+                  quantityMetres,
+                });
+                setReceiptOpen(false);
+                setSpecificQuantity("");
+              }}
+            >
+              <fieldset className="form-section span-all">
+                <legend>1. Quantity received</legend>
+                <label className="choice-card span-all">
+                  <input
+                    type="radio"
+                    name="receiptMode"
+                    value="full"
+                    checked={receiptMode === "full"}
+                    onChange={() => setReceiptMode("full")}
+                  />
+                  <span>
+                    <strong>Receive all outstanding fabric</strong>
+                    <small>
+                      {outstanding.toLocaleString("en-IN")} m — this will
+                      complete the PO.
+                    </small>
+                  </span>
+                </label>
+                <label className="choice-card span-all">
+                  <input
+                    type="radio"
+                    name="receiptMode"
+                    value="specific"
+                    checked={receiptMode === "specific"}
+                    onChange={() => setReceiptMode("specific")}
+                  />
+                  <span>
+                    <strong>Enter a specific quantity</strong>
+                    <small>
+                      The PO stays partial unless this quantity completes it.
+                    </small>
+                  </span>
+                </label>
+                {receiptMode === "specific" ? (
+                  <label className="span-all">
+                    Received quantity (metres)
+                    <input
+                      type="number"
+                      min="0.001"
+                      max={outstanding}
+                      step="0.001"
+                      required
+                      value={specificQuantity}
+                      onChange={(event) =>
+                        setSpecificQuantity(event.target.value)
+                      }
+                    />
+                  </label>
+                ) : null}
+                {receiptMode === "full" ||
+                Number(specificQuantity) === outstanding ? (
+                  <p className="form-note span-all">
+                    You are completing the full outstanding quantity. Clicking
+                    “Confirm full receipt” is your approval to mark this PO as
+                    Received.
+                  </p>
+                ) : null}
+              </fieldset>
+              <fieldset className="form-section span-all">
+                <legend>2. Receipt details</legend>
+                <label>
+                  Receipt date
+                  <input
+                    name="receiptDate"
+                    type="date"
+                    required
+                    defaultValue={new Date().toISOString().slice(0, 10)}
+                  />
+                </label>
+                <label>
+                  Warehouse
+                  <input
+                    name="warehouse"
+                    required
+                    defaultValue="Singal Fabrics"
+                    list="warehouse-options"
+                  />
+                </label>
+                <datalist id="warehouse-options">
+                  {uniqueValues(
+                    state.fabricReceipts.map((item) => item.warehouse),
+                  ).map((value) => (
+                    <option key={value} value={value} />
+                  ))}
+                </datalist>
+                <label>
+                  Lot number
+                  <input name="lotNumber" />
+                </label>
+                <label>
+                  LR number
+                  <input name="lrNumber" />
+                </label>
+                <label>
+                  LR date
+                  <input name="lrDate" type="date" />
+                </label>
+                <label>
+                  Transporter
+                  <select name="transporterId" defaultValue="">
+                    <option value="">No transporter recorded</option>
+                    {state.organizations
+                      .filter(
+                        (item) =>
+                          item.roles.includes("transporter") && !item.archived,
+                      )
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  Number of bales
+                  <input name="numberOfBales" type="number" min="1" />
+                </label>
+                <label className="span-all">
+                  Remarks
+                  <textarea name="remarks" />
+                </label>
+              </fieldset>
+              <div className="modal-actions span-all">
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => setReceiptOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button primary"
+                  type="submit"
+                  disabled={
+                    receiptMode === "specific" &&
+                    (!specificQuantity ||
+                      Number(specificQuantity) <= 0 ||
+                      Number(specificQuantity) > outstanding)
+                  }
+                >
+                  {receiptMode === "full" ||
+                  Number(specificQuantity) === outstanding
+                    ? "Confirm full receipt"
+                    : "Record partial receipt"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1454,7 +1983,7 @@ export function EnhancedTransport({
                       ) : (
                         "Unplanned fabric"
                       )}{" "}
-                      · {item.dcIssueDate}
+                      · {shortDate(item.dcIssueDate)}
                     </small>
                   </td>
                   <td>
@@ -1505,16 +2034,21 @@ export function EnhancedTransport({
   );
 }
 
-const partnerRoles: OrganizationRole[] = [
-  "supplier",
-  "vendor",
-  "agent",
-  "jobworker",
-  "transporter",
-  "distributor",
-  "customer",
-  "legal_entity",
+const partnerRoles: Array<{ value: OrganizationRole; label: string }> = [
+  { value: "supplier", label: "Supplier" },
+  { value: "agent", label: "Agent" },
+  { value: "jobworker", label: "Jobworker" },
+  { value: "transporter", label: "Transporter" },
+  { value: "coolie", label: "Coolie" },
+  { value: "distributor", label: "Customer / Party" },
 ];
+const partnerRoleLabel = (role: OrganizationRole) =>
+  partnerRoles.find((item) => item.value === role)?.label ||
+  (role === "vendor"
+    ? "Supplier"
+    : role === "customer"
+      ? "Customer / Party"
+      : role.replace("_", " "));
 export function EnhancedPartners({
   state,
   query,
@@ -1593,11 +2127,24 @@ export function EnhancedPartners({
           <span>delivery and warehouse partners</span>
         </div>
         <div className="stat">
+          <span className="stat-label">Coolies</span>
+          <strong>
+            {
+              state.organizations.filter((item) =>
+                item.roles.includes("coolie"),
+              ).length
+            }
+          </strong>
+          <span>loading and handling workers</span>
+        </div>
+        <div className="stat">
           <span className="stat-label">Parties</span>
           <strong>
             {
               state.organizations.filter((item) =>
-                item.roles.includes("distributor"),
+                item.roles.some((role) =>
+                  ["distributor", "customer"].includes(role),
+                ),
               ).length
             }
           </strong>
@@ -1620,7 +2167,7 @@ export function EnhancedPartners({
         >
           {suppliersOnly
             ? "Company and contact details, GSTIN, location, notes, and purchases in one directory."
-            : "A clean reusable directory for suppliers, vendors, agents, jobworkers, transporters, distributors, customers, and brands."}
+            : "The shared master for suppliers, agents, jobworkers, transporters, coolies, and customers / parties."}
         </SectionTitle>
         {partners.length ? (
           table(
@@ -1649,9 +2196,7 @@ export function EnhancedPartners({
                   </td>
                   <td>
                     {item.roles.map((role) => (
-                      <Badge key={role}>
-                        {role === "supplier" ? "supplier/vendor" : role}
-                      </Badge>
+                      <Badge key={role}>{partnerRoleLabel(role)}</Badge>
                     ))}
                   </td>
                   <td>
@@ -1733,19 +2278,26 @@ export function EnhancedPartners({
               <fieldset className="role-options span-all">
                 <legend>Roles</legend>
                 {partnerRoles.map((role) => (
-                  <label key={role}>
+                  <label key={role.value}>
                     <input
                       type="checkbox"
                       name="roles"
-                      value={role}
+                      value={role.value}
                       defaultChecked={
-                        selected?.roles.includes(role) ||
-                        (adding && role === "supplier")
+                        selected?.roles.includes(role.value) ||
+                        (adding && role.value === "supplier")
                       }
                     />{" "}
-                    {role.replace("_", " ")}
+                    {role.label}
                   </label>
                 ))}
+                {selected?.roles
+                  .filter(
+                    (role) => !partnerRoles.some((item) => item.value === role),
+                  )
+                  .map((role) => (
+                    <input key={role} type="hidden" name="roles" value={role} />
+                  ))}
               </fieldset>
               <label>
                 Email
@@ -1897,7 +2449,7 @@ export function EnhancedReports({
                 const work = inwardWork.get(inward.workOrderId);
                 return (
                   <tr key={inward.id}>
-                    <td>{inward.inwardDate}</td>
+                    <td>{shortDate(inward.inwardDate)}</td>
                     <td>
                       <strong>{work?.woNumber || "—"}</strong>
                       <small>{work?.jobworkerName}</small>

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   PRODUCTION_SIZES,
+  shortDate,
   type ProductionWorkOrder,
   type State,
 } from "@/lib/types";
@@ -141,9 +142,7 @@ function ProductionUpdateDrawer({
   close: () => void;
 }) {
   const databaseStages = state.referenceValues
-    .filter(
-      (item) => item.category === "production_status" && item.active,
-    )
+    .filter((item) => item.category === "production_status" && item.active)
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((item) => item.value);
   const stageOptions = Array.from(
@@ -193,9 +192,7 @@ function ProductionUpdateDrawer({
         ...(rules.requireCuttingDate
           ? { cuttingDate: form.get("cuttingDate") }
           : {}),
-        ...(rules.showFiDone
-          ? { fiDone: form.get("fiDone") === "on" }
-          : {}),
+        ...(rules.showFiDone ? { fiDone: form.get("fiDone") === "on" } : {}),
         ...(rules.requireGoodsReadyDate
           ? { actualGoodsReadyDate: form.get("actualGoodsReadyDate") }
           : {}),
@@ -219,7 +216,9 @@ function ProductionUpdateDrawer({
       close();
     } catch (caught) {
       setError(
-        caught instanceof Error ? caught.message : "Unable to update production",
+        caught instanceof Error
+          ? caught.message
+          : "Unable to update production",
       );
     } finally {
       setBusy(false);
@@ -519,7 +518,7 @@ export function OperationsViews({
                 <tr key={order.id}>
                   <td>
                     <strong>{order.poNumber}</strong>
-                    <small>{order.orderDate}</small>
+                    <small>{shortDate(order.orderDate)}</small>
                   </td>
                   <td>
                     <strong>{order.fabricName}</strong>
@@ -712,7 +711,8 @@ export function OperationsViews({
                   <td>
                     <strong>{item.outwardDcNumber}</strong>
                     <small>
-                      {item.poNumber || "Unplanned fabric"} · {item.dcIssueDate}
+                      {item.poNumber || "Unplanned fabric"} ·{" "}
+                      {shortDate(item.dcIssueDate)}
                     </small>
                   </td>
                   <td>
