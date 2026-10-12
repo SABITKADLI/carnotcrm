@@ -553,11 +553,6 @@ export type Kind = keyof Entities;
 export interface State {
   user: User;
   users: User[];
-  contacts: Contact[];
-  fabrics: Fabric[];
-  purchases: Purchase[];
-  orders: Order[];
-  jobs: Job[];
   products: Product[];
   invoices: Invoice[];
   payments: Payment[];

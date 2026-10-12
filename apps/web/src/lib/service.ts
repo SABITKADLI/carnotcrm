@@ -164,23 +164,10 @@ export function state(user: User, includeOperations = true): State {
               (workOrder) => workOrder.id === inward.workOrderId,
             ),
           );
-    const jobs: State["jobs"] = [];
-    const orders: State["orders"] = [];
     if (user.role !== "admin") {
       return {
         user,
         users: [user],
-        jobs,
-        orders: orders.map((o) => ({
-          ...o,
-          customerId: "",
-          unitPrice: 0,
-          laborCost: 0,
-          issuedCost: 0,
-        })),
-        contacts: [],
-        fabrics: [],
-        purchases: [],
         products: [],
         invoices: [],
         payments: [],
@@ -243,11 +230,6 @@ export function state(user: User, includeOperations = true): State {
     return {
       user,
       users: team,
-      contacts: [],
-      fabrics: [],
-      purchases: [],
-      orders,
-      jobs,
       products: all("products"),
       invoices: all("invoices"),
       payments: all("payments"),
@@ -1515,13 +1497,6 @@ function perform(user: User, action: string, input: Input): unknown {
         throw new Error("You cannot disable your own account");
       const person = users().find((u) => u.id === id);
       if (!person) throw new Error("User not found");
-      if (
-        !active &&
-        all("jobs").some((j) => j.tailorId === id && j.status !== "accepted")
-      )
-        throw new Error(
-          "Complete open tailor assignments before disabling this account",
-        );
       setUserActive(id, active);
       audit(user, active ? "Enabled account" : "Disabled account", person.name);
       return { success: true };

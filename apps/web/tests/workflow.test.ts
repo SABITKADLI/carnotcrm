@@ -109,8 +109,8 @@ test("PO to receipt to challan to production to inward to finished sale", () => 
 test("legacy garment actions and routes are retired", () => {
   for (const action of ["order", "plan", "assign", "progress", "quality", "purchase", "fabric", "contact"])
     assert.throws(() => run(action, {}), /older workflow has been retired/);
-  assert.deepEqual(state(admin).orders, []);
-  assert.deepEqual(state(admin).jobs, []);
+  assert.equal("orders" in state(admin), false);
+  assert.equal("jobs" in state(admin), false);
 });
 
 test("legacy data is backed up, customers are linked, and old records are removed", async () => {

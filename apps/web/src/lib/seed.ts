@@ -37,7 +37,7 @@ export async function seedDemo() {
       action: "Sample workspace ready",
       subject: "Demo data",
       detail:
-        "Demo accounts were created. Add fabrics, customers and orders to explore the workflow.",
+        "Demo accounts were created. Add partners, fabric purchase orders and work orders to explore the workflow.",
     });
   });
 }

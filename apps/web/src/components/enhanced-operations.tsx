@@ -2452,6 +2452,9 @@ export function EnhancedReports({
   const invoices = state.invoices.filter((item) =>
     inSelectedPeriod(item.createdAt, period),
   );
+  const payments = state.payments.filter((item) =>
+    inSelectedPeriod(item.date, period),
+  );
   const inwardWork = new Map(state.workOrders.map((item) => [item.id, item]));
   const inwardByWork = new Map<string, number>();
   for (const inward of state.inwards)
@@ -2470,6 +2473,8 @@ export function EnhancedReports({
   const byStage = grouped(workOrders, (work) => work.status, (work) => work.bodyFabric, (work) => work.value);
   const byJobworker = grouped(workOrders, (work) => work.jobworkerName, (work) => work.bodyFabric, (work) => work.value);
   const byBrand = grouped(workOrders, (work) => work.brandName, (work) => work.expectedQuantity, (work) => work.value);
+  const byTransportStage = grouped(transports, (movement) => movement.stage, (movement) => movement.fabricQuantity, (movement) => movement.value);
+  const byTransporter = grouped(transports, (movement) => movement.transportName, (movement) => movement.fabricQuantity, (movement) => movement.value);
   const supplierTotals = Object.entries(
     orders.reduce<Record<string, { metres: number; value: number }>>(
       (acc, order) => {
@@ -2498,6 +2503,30 @@ export function EnhancedReports({
   const inwardPieces = workOrders.reduce((sum, item) => sum + (inwardByWork.get(item.id) || 0), 0);
   const invoiced = invoices.reduce((sum, item) => sum + item.total, 0) / 100;
   const outstanding = invoices.reduce((sum, item) => sum + item.total - item.paid, 0) / 100;
+  const collected = payments.reduce((sum, payment) => sum + payment.amount, 0) / 100;
+  const today = new Date().toISOString().slice(0, 10);
+  const overdueOrders = state.fabricOrders.filter((order) => !order.archived && order.deliveryDate && order.deliveryDate < today && order.quantityOrdered > order.receivedMetres + order.cancelledMetres);
+  const daysSince = (date: string) => date ? Math.max(0, Math.floor((new Date(`${today}T00:00:00Z`).getTime() - new Date(`${date.slice(0, 10)}T00:00:00Z`).getTime()) / 86_400_000)) : 0;
+  const openWork = state.workOrders.filter((work) => !work.archived);
+  const ageing30 = openWork.filter((work) => daysSince(work.fabricOutwardDate || work.issuedDate) >= 30).length;
+  const ageing45 = openWork.filter((work) => daysSince(work.fabricOutwardDate || work.issuedDate) >= 45).length;
+  const ageing60 = openWork.filter((work) => daysSince(work.fabricOutwardDate || work.issuedDate) >= 60).length;
+  const cleared = state.workOrders.filter((work) => work.archived && work.actualGoodsReadyDate && work.fabricOutwardDate && inSelectedPeriod(work.actualGoodsReadyDate, period));
+  const averageClearance = cleared.length ? Math.round(cleared.reduce((sum, work) => sum + Math.max(0, (new Date(work.actualGoodsReadyDate).getTime() - new Date(work.fabricOutwardDate).getTime()) / 86_400_000), 0) / cleared.length) : 0;
+  const consumption = cleared.flatMap((work) => {
+    const inward = inwardByWork.get(work.id) || 0;
+    if (!inward || !work.approvedConsumption) return [];
+    const actual = work.bodyFabric / inward;
+    const variance = actual - work.approvedConsumption;
+    return [{ work, inward, actual, variance, value: variance * inward * work.pricePerMetre }];
+  }).sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const monthKeys = [...new Set([
+    ...orders.map((item) => item.orderDate.slice(0, 7)),
+    ...transports.map((item) => item.dcIssueDate.slice(0, 7)),
+    ...inwards.map((item) => item.inwardDate.slice(0, 7)),
+    ...invoices.map((item) => item.createdAt.slice(0, 7)),
+    ...payments.map((item) => item.date.slice(0, 7)),
+  ])].filter(Boolean).sort().reverse();
   const discrepancies = workOrders.map((work) => ({
     work,
     inward: inwardByWork.get(work.id) || 0,
@@ -2522,15 +2551,19 @@ export function EnhancedReports({
       <div className="stats">
         {stat("Fabric ordered", `${formatQuantity(orderedMetres)} m`, `${money(orders.reduce((sum, item) => sum + item.fabricValue, 0))} across ${orders.length} POs`)}
         {stat("Fabric received", `${formatQuantity(receivedMetres)} m`, `${formatQuantity(orderedMetres - receivedMetres)} m outstanding on period POs`)}
+        {stat("Overdue POs", `${overdueOrders.length}`, `${formatQuantity(overdueOrders.reduce((sum, order) => sum + order.quantityOrdered - order.receivedMetres - order.cancelledMetres, 0))} m still due · current backlog`)}
         {stat("Fabric dispatched", `${formatQuantity(dispatchedMetres)} m`, `${transports.reduce((sum, item) => sum + item.numberOfBales, 0)} bales on ${transports.length} movements`)}
         {stat("Unplanned transport", `${unplanned.length} lines`, `${formatQuantity(unplanned.reduce((sum, item) => sum + item.fabricQuantity, 0))} m without a PO`)}
         {stat("Production issued", `${workOrders.length} WOs`, `${formatQuantity(workOrders.reduce((sum, item) => sum + item.bodyFabric, 0))} m of body fabric`)}
+        {stat("Production ageing", `${ageing30} / ${ageing45} / ${ageing60}`, "open WOs at 30 / 45 / 60+ days · current backlog")}
+        {stat("Clearance speed", `${averageClearance} days`, `${cleared.length} work orders ready in period`)}
         {stat("Expected / cut", `${formatPieces(expectedPieces)} / ${formatPieces(cutPieces)}`, "pieces on period work orders")}
         {stat("Inward", `${formatQuantity(inwards.reduce((sum, item) => sum + item.totalInward, 0))} pcs`, `${formatQuantity(inwardPieces)} pcs tied to period WOs`)}
         {stat("Damage / mix", `${formatQuantity(damage)} / ${formatQuantity(mix)}`, "pieces received during period")}
         {stat("Cut–inward differences", `${discrepancies.length} lots`, `${formatQuantity(discrepancies.reduce((sum, item) => sum + Math.abs(item.difference), 0))} pieces to review`)}
         {stat("Cut quantities missing", `${missingCutQuantity} lots`, "inward recorded without a cut count")}
         {stat("Invoiced", money(invoiced), `${invoices.length} invoices in period`)}
+        {stat("Payments received", money(collected), "cash recorded during period")}
         {stat("Outstanding", money(outstanding), "unpaid on period invoices")}
         {stat("Finished stock", `${formatQuantity(state.products.reduce((sum, item) => sum + item.stock, 0))} pcs`, `${formatQuantity(state.products.reduce((sum, item) => sum + item.channelStock, 0))} allocated to Shopify, current balance`)}
       </div>
@@ -2539,6 +2572,20 @@ export function EnhancedReports({
         {breakdown("Production stage", "Work order fabric and value by current stage.", byStage, "m")}
         {breakdown("Jobworker workload", "Fabric issued and value by factory.", byJobworker, "m")}
         {breakdown("Brand production", "Expected pieces and fabric value by brand.", byBrand, "pcs")}
+        {breakdown("Transport stage", "Fabric quantity and value by current delivery stage.", byTransportStage, "m")}
+        {breakdown("Transporter activity", "Fabric quantity and value carried by each transporter.", byTransporter, "m")}
+        <section className="panel">
+          <SectionTitle title="Monthly flow">The selected period by order, dispatch, inward, invoice and payment date.</SectionTitle>
+          {monthKeys.length ? table(["Month", "Ordered m", "Dispatched m", "Inward pcs", "Invoiced", "Collected"], monthKeys.map((month) => (
+            <tr key={month}><td><strong>{month}</strong></td>
+              <td>{formatQuantity(orders.filter((item) => item.orderDate.startsWith(month)).reduce((sum, item) => sum + item.quantityOrdered, 0))}</td>
+              <td>{formatQuantity(transports.filter((item) => item.dcIssueDate.startsWith(month)).reduce((sum, item) => sum + item.fabricQuantity, 0))}</td>
+              <td>{formatPieces(inwards.filter((item) => item.inwardDate.startsWith(month)).reduce((sum, item) => sum + item.totalInward, 0))}</td>
+              <td>{money(invoices.filter((item) => item.createdAt.startsWith(month)).reduce((sum, item) => sum + item.total, 0) / 100)}</td>
+              <td>{money(payments.filter((item) => item.date.startsWith(month)).reduce((sum, item) => sum + item.amount, 0) / 100)}</td>
+            </tr>
+          ))) : <Empty title="No monthly activity in this period" />}
+        </section>
         <section className="panel">
           <SectionTitle title="Purchasing by supplier">
             Quantity and order value for the selected period.
@@ -2592,6 +2639,14 @@ export function EnhancedReports({
           {discrepancies.length ? table(["Work order", "Jobworker", "Cut", "Inward", "Difference"], discrepancies.slice(0, 30).map(({ work, inward, difference }) => (
             <tr key={work.id}><td><strong>{work.woNumber}</strong></td><td>{work.jobworkerName}</td><td>{formatQuantity(work.totalCutQuantity)}</td><td>{formatQuantity(inward)}</td><td>{difference > 0 ? "+" : ""}{formatQuantity(difference)}</td></tr>
           ))) : <Empty title="No cut-to-inward differences in this period" />}
+        </section>
+        <section className="panel">
+          <SectionTitle title="Consumption variance">Work orders ready in this period. Actual body fabric per inward piece compared with approved metres per piece. Positive value indicates extra fabric used.</SectionTitle>
+          {consumption.length ? table(["Work order", "Jobworker", "Approved m/pc", "Actual m/pc", "Variance m/pc", "Estimated value"], consumption.slice(0, 30).map(({ work, actual, variance, value }) => (
+            <tr key={work.id}><td><strong>{work.woNumber}</strong></td><td>{work.jobworkerName}</td>
+              <td>{formatQuantity(work.approvedConsumption || 0)}</td><td>{formatQuantity(actual)}</td>
+              <td>{variance > 0 ? "+" : ""}{formatQuantity(variance)}</td><td>{money(value)}</td></tr>
+          ))) : <Empty title="No approved consumption to compare in this period" />}
         </section>
       </div>
     </>
