@@ -2262,6 +2262,7 @@ export function EnhancedPartners({
               </div>
               <button
                 className="icon-button"
+                aria-label="Close partner form"
                 onClick={() => {
                   setSelected(null);
                   setAdding(false);
