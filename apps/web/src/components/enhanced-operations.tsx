@@ -784,9 +784,9 @@ export function EnhancedFabricOrders({
   const [createdPoNumber, setCreatedPoNumber] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [urlStatus] = useState(filters.status || "");
+  const [statusFilter, setStatusFilter] = useState(filters.status || "all");
   const normalizedQuery = query.trim().toLowerCase();
-  const orders = state.fabricOrders.filter((order) => {
+  const periodOrders = state.fabricOrders.filter((order) => {
     const searchable = JSON.stringify({
       ...order,
       source: `${order.sourceSheet || "Portal"} ${order.sourceRow || ""}`,
@@ -794,10 +794,19 @@ export function EnhancedFabricOrders({
     return (
       !order.archived &&
       (!normalizedQuery || searchable.includes(normalizedQuery)) &&
-      (!urlStatus || order.status === urlStatus) &&
       inSelectedPeriod(order.orderDate, period)
     );
   });
+  const statusOptions = [
+    { value: "all", label: "All orders" },
+    { value: "Ordered", label: "Ordered" },
+    { value: "Partial", label: "Part received" },
+    { value: "Received", label: "Received" },
+    { value: "Cancelled", label: "Cancelled" },
+  ] as const;
+  const orders = periodOrders.filter(
+    (order) => statusFilter === "all" || order.status === statusFilter,
+  );
   const selected = state.fabricOrders.find((order) => order.id === selectedId);
   const visible = orders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   return (
@@ -819,6 +828,33 @@ export function EnhancedFabricOrders({
           </div>
         </section>
       )}
+      <section
+        className="po-status-filters"
+        aria-label="Filter purchase orders by status"
+      >
+        {statusOptions.map((option) => {
+          const count =
+            option.value === "all"
+              ? periodOrders.length
+              : periodOrders.filter((order) => order.status === option.value)
+                  .length;
+          return (
+            <button
+              type="button"
+              key={option.value}
+              className={`filter-stat ${statusFilter === option.value ? "selected" : ""}`}
+              aria-pressed={statusFilter === option.value}
+              onClick={() => {
+                setStatusFilter(option.value);
+                setPage(1);
+              }}
+            >
+              <span>{option.label}</span>
+              <strong>{count.toLocaleString("en-IN")}</strong>
+            </button>
+          );
+        })}
+      </section>
       <section className="panel operations-panel">
         <SectionTitle title="Fabric purchase orders">
           Search covers every PO field, dates, quantities, values, remarks, and
@@ -974,6 +1010,13 @@ function FabricOrderDrawer({
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [receiptMode, setReceiptMode] = useState<"full" | "specific">("full");
   const [specificQuantity, setSpecificQuantity] = useState("");
+  const [receiptWarehouse, setReceiptWarehouse] = useState("Singal Fabrics");
+  const [receiptTransporterId, setReceiptTransporterId] = useState("");
+  const selectReceiptTransporter = (id: string) => {
+    setReceiptTransporterId(id);
+    const transporter = state.organizations.find((item) => item.id === id);
+    if (transporter) setReceiptWarehouse(transporter.name);
+  };
   const outstanding = Math.max(
     0,
     order.quantityOrdered - order.receivedMetres - order.cancelledMetres,
@@ -1505,7 +1548,12 @@ function FabricOrderDrawer({
             </label>
             <label>
               Warehouse
-              <input name="warehouse" required defaultValue="Singal Fabrics" />
+              <input
+                name="warehouse"
+                required
+                value={receiptWarehouse}
+                onChange={(event) => setReceiptWarehouse(event.target.value)}
+              />
             </label>
             <label>
               Lot number
@@ -1521,7 +1569,13 @@ function FabricOrderDrawer({
             </label>
             <label>
               Transporter
-              <select name="transporterId" defaultValue="">
+              <select
+                name="transporterId"
+                value={receiptTransporterId}
+                onChange={(event) =>
+                  selectReceiptTransporter(event.target.value)
+                }
+              >
                 <option value="">No linked transport</option>
                 {state.organizations
                   .filter((item) => item.roles.includes("transporter"))
@@ -1542,7 +1596,11 @@ function FabricOrderDrawer({
             </label>
             <label>
               Destination
-              <input name="destinationLocation" defaultValue="Singal Fabrics" />
+              <input
+                name="destinationLocation"
+                value={receiptWarehouse}
+                onChange={(event) => setReceiptWarehouse(event.target.value)}
+              />
             </label>
             <label>
               Party
@@ -1714,7 +1772,10 @@ function FabricOrderDrawer({
                   <input
                     name="warehouse"
                     required
-                    defaultValue="Singal Fabrics"
+                    value={receiptWarehouse}
+                    onChange={(event) =>
+                      setReceiptWarehouse(event.target.value)
+                    }
                     list="warehouse-options"
                   />
                 </label>
@@ -1739,7 +1800,13 @@ function FabricOrderDrawer({
                 </label>
                 <label>
                   Transporter
-                  <select name="transporterId" defaultValue="">
+                  <select
+                    name="transporterId"
+                    value={receiptTransporterId}
+                    onChange={(event) =>
+                      selectReceiptTransporter(event.target.value)
+                    }
+                  >
                     <option value="">No transporter recorded</option>
                     {state.organizations
                       .filter(

@@ -1,7 +1,16 @@
 import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import ExcelJS, { type Row, type Worksheet } from "exceljs";
-import { all, base, clearKind, get, put, transaction, withStore } from "./db";
+import {
+  all,
+  base,
+  clearKind,
+  get,
+  put,
+  remove,
+  transaction,
+  withStore,
+} from "./db";
 import { audit } from "./service";
 import {
   PRODUCTION_SIZES,
@@ -897,6 +906,61 @@ export async function parseWorkbook(
         resolved: false,
       });
   }
+  for (const workOrder of workOrders.values()) {
+    if (workOrder.challanId) continue;
+    const key = normalized(workOrder.dcNumber);
+    const jobworker = organizations.get(normalized(workOrder.jobworkerName));
+    const challan: DeliveryChallan = {
+      ...traced(
+        stableId("dc", key),
+        workOrder.sourceSheet || "PRODUCTION",
+        workOrder.sourceRow || 0,
+        workOrder.dcNumber,
+        workOrder.dcNumber,
+      ),
+      number: workOrder.dcNumber,
+      issueDate: workOrder.fabricOutwardDate || workOrder.issuedDate,
+      status: workOrder.archived ? "Acknowledged" : "Issued",
+      issuer: {
+        name: "Singal Fabrics",
+        address:
+          "76, Ground Floor, Singal Square, 3rd Cross Rd, Lal Bagh Road, Bengaluru, Karnataka – 560027",
+        taxId: "29AGDPS5158E1Z5",
+        email: "contact@singalfabrics.com",
+        phone: "+91 96862 95345",
+      },
+      consignee: {
+        name: jobworker?.name || workOrder.jobworkerName,
+        address: jobworker?.address || "",
+        taxId: jobworker?.taxId || "",
+        email: jobworker?.email || "",
+        phone: jobworker?.phone || "",
+      },
+      jobworkerId: jobworker?.id || workOrder.jobworkerId,
+      driverName: "",
+      driverPhone: "",
+      transportName: "",
+      lrNumber: "",
+      purpose: "Historical job-work issue imported from the production sheet.",
+      terms: "Material remains the property of Singal Fabrics.",
+      remarks: "Transport source row was not available in the workbook.",
+      lines: [],
+      issuedAt: workOrder.fabricOutwardDate || workOrder.issuedDate,
+    };
+    challans.set(key, challan);
+    workOrder.challanId = challan.id;
+    issues.push({
+      ...base("issue"),
+      runId,
+      sheet: workOrder.sourceSheet || "PRODUCTION",
+      rowNumber: workOrder.sourceRow || 0,
+      severity: "warning",
+      code: "HISTORICAL_CHALLAN",
+      message: `Created a historical challan link for ${workOrder.dcNumber}; no valid transport row was available.`,
+      values: { dcNumber: workOrder.dcNumber, woNumber: workOrder.woNumber },
+      resolved: false,
+    });
+  }
   records.organizations = [...organizations.values()];
   records.people = [...people.values()];
   records.fabricSpecs = specs;
@@ -1210,6 +1274,69 @@ export async function commitWorkbook(runId: string, user: User) {
       success: true,
       counts: parsed.counts,
       issues: parsed.issues.length,
+    };
+  });
+}
+
+export async function resetWorkbookOperations(user: User) {
+  if (user.role !== "admin") throw new Error("Administrator access required");
+  return transaction(() => {
+    const oldWorkOrders = all("workOrders");
+    const oldFabricOrders = all("fabricOrders");
+    const oldChallans = all("challans");
+    const backupKinds: Kind[] = [
+      ...operationalKinds,
+      "syncRuns",
+      "products",
+      "movements",
+      "attachments",
+    ];
+    const snapshot = Object.fromEntries(
+      backupKinds.map((kind) => [kind, all(kind)]),
+    );
+    const backup = put("operationalBackups", {
+      ...base("backup"),
+      label: `Before workbook reset ${new Date().toISOString().slice(0, 10)}`,
+      createdBy: user.id,
+      counts: Object.fromEntries(
+        backupKinds.map((kind) => [kind, all(kind).length]),
+      ),
+      payload: pack(snapshot),
+    });
+    const oldWorkOrderIds = new Set(oldWorkOrders.map((item) => item.id));
+    const oldFabricOrderIds = new Set(oldFabricOrders.map((item) => item.id));
+    const operationalReferences = new Set([
+      ...oldFabricOrders.map((item) => item.poNumber),
+      ...oldChallans.map((item) => item.number),
+      ...oldWorkOrders.map((item) => item.woNumber),
+    ]);
+    for (const product of all("products"))
+      if (oldWorkOrderIds.has(product.orderId)) remove("products", product.id);
+    for (const attachment of all("attachments"))
+      if (oldFabricOrderIds.has(attachment.entityId))
+        remove("attachments", attachment.id);
+    for (const movement of all("movements"))
+      if (
+        ["Fabric receipt", "Jobworker issue", "Garment inward"].includes(
+          movement.type,
+        ) &&
+        operationalReferences.has(movement.reference)
+      )
+        remove("movements", movement.id);
+    for (const kind of operationalKinds) clearKind(kind);
+    clearKind("syncRuns");
+    audit(
+      user,
+      "Cleared workbook operations",
+      "Workbook Sync",
+      `Backup ${backup.id} created before clearing operational records`,
+    );
+    return {
+      success: true,
+      backupId: backup.id,
+      cleared: Object.fromEntries(
+        operationalKinds.map((kind) => [kind, snapshot[kind]?.length || 0]),
+      ),
     };
   });
 }

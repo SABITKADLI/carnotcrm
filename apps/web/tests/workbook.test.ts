@@ -106,6 +106,11 @@ test("workbook parser maps source columns, dates, calculated values and inward d
   active[32] = "Cutting";
   active[61] = "wo_active_preserved";
   production.addRow(active);
+  const historical = [...active];
+  historical[0] = "SF-HISTORICAL";
+  historical[3] = "3201";
+  historical[61] = "wo_historical_preserved";
+  production.addRow(historical);
   const cleared = workbook.addWorksheet("CLEARED LOTS");
   cleared.addRow(["CLEARED"]);
   cleared.addRow([]);
@@ -208,7 +213,7 @@ test("workbook parser maps source columns, dates, calculated values and inward d
   assert.equal(parsed.records.fabricOrders?.[0].partyIds?.length, 2);
   assert.equal(parsed.counts.fabricOrders, 1);
   assert.equal(parsed.counts.transports, 1);
-  assert.equal(parsed.counts.sourceActiveWorkOrders, 1);
+  assert.equal(parsed.counts.sourceActiveWorkOrders, 2);
   assert.equal(parsed.counts.sourceClearedLots, 1);
   assert.equal(parsed.records.fabricOrders?.[0].fabricValue, 125000);
   assert.equal(parsed.records.fabricOrders?.[0].id, "fpo_preserved");
@@ -220,6 +225,18 @@ test("workbook parser maps source columns, dates, calculated values and inward d
     parsed.records.workOrders?.find((item) => item.woNumber === "3200")?.id,
     "wo_active_preserved",
   );
+  const historicalWorkOrder = parsed.records.workOrders?.find(
+    (item) => item.woNumber === "3201",
+  );
+  assert.ok(historicalWorkOrder?.challanId);
+  assert.ok(
+    parsed.records.challans?.some(
+      (item) =>
+        item.id === historicalWorkOrder?.challanId &&
+        item.number === "SF-HISTORICAL",
+    ),
+  );
+  assert.ok(parsed.issues.some((issue) => issue.code === "HISTORICAL_CHALLAN"));
   assert.equal(
     parsed.records.workOrders?.find((item) => item.woNumber === "3199")?.id,
     "wo_cleared_preserved",

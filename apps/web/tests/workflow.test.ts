@@ -6,6 +6,7 @@ import { createUser, login, sessionUser, startSession } from "../src/lib/auth";
 import { execute, state } from "../src/lib/service";
 import { createPlan } from "../src/lib/cutting";
 import { processPaidWebhook, sendToShopify } from "../src/lib/shopify";
+import { resetWorkbookOperations } from "../src/lib/workbook";
 import type {
   Contact,
   Fabric,
@@ -279,7 +280,7 @@ test("fabric PO status, receipts, and linked delivery challans reconcile quantit
     fabricOrderId: po.id,
     receiptDate: "2026-09-10",
     quantityMetres: 40,
-    warehouse: "Singal Fabrics",
+    warehouse: carrier.name,
     lrNumber: "LR-42",
     transporterId: carrier.id,
     numberOfBales: 2,
@@ -291,6 +292,8 @@ test("fabric PO status, receipts, and linked delivery challans reconcile quantit
   assert.equal(get("fabricOrders", po.id).receivedMetres, 40);
   assert.equal(all("challans").length, 1);
   assert.equal(all("transports")[0].lrNumber, "LR-42");
+  assert.equal(all("fabricReceipts")[0].warehouse, "Carrier One");
+  assert.equal(all("fabricReceipts")[0].transportName, "Carrier One");
   assert.throws(
     () => run("fabricOrderStatus", { id: po.id, status: "Ordered" }),
     /must be Partial or Received/,
@@ -301,6 +304,47 @@ test("fabric PO status, receipts, and linked delivery challans reconcile quantit
     cancelledMetres: 60,
   });
   assert.equal(get("fabricOrders", po.id).cancelledMetres, 60);
+});
+test("workbook reset backs up and clears operations while preserving access", async () => {
+  const mill = run<Organization>("organization", {
+    name: "Reset Mill",
+    roles: ["supplier"],
+  });
+  const spec = put("fabricSpecs", {
+    ...base("fs"),
+    version: 1,
+    name: "Reset Oxford",
+    rangeName: "",
+    width: "58",
+    folding: "Open",
+    weave: "Plain",
+    threadCount: "",
+    construction: "",
+    content: "Cotton",
+    supplierId: mill.id,
+  } satisfies FabricSpec);
+  run<FabricOrder>("fabricOrder", {
+    fabricSpecId: spec.id,
+    orderDate: "2026-10-12",
+    deliveryDate: "2026-10-30",
+    fabricType: "Shirting",
+    pricePerMetre: 100,
+    quantityOrdered: 50,
+    designs: "1",
+    colors: "1",
+    newPartyName: "Reset Party",
+    fabricFor: "Garment",
+  });
+
+  const result = await resetWorkbookOperations(admin);
+
+  assert.equal(result.success, true);
+  assert.equal(all("fabricOrders").length, 0);
+  assert.equal(all("fabricSpecs").length, 0);
+  assert.equal(all("organizations").length, 0);
+  assert.equal(all("operationalBackups").length, 1);
+  assert.ok(sessionUser(startSession(admin.id)));
+  assert.equal(settings().portalName, "Carnot CRM");
 });
 test("partner master accepts coolies and manual PO entry creates reusable master data", () => {
   const coolie = run<Organization>("organization", {

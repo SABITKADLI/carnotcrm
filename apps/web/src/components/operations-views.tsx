@@ -1393,12 +1393,42 @@ function NewFabricOrder({ state, mutate }: { state: State; mutate: Mutate }) {
 
 function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
   const [open, setOpen] = useState(false);
+  const [fabricOrderId, setFabricOrderId] = useState("");
+  const [fabricName, setFabricName] = useState("");
+  const [supplierId, setSupplierId] = useState("");
+  const [partyId, setPartyId] = useState("");
+  const [fabricQuantity, setFabricQuantity] = useState("");
+  const [pricePerMetre, setPricePerMetre] = useState("");
   const partners = (
     role: "supplier" | "distributor" | "jobworker" | "transporter",
   ) =>
     state.organizations.filter((organization) =>
       organization.roles.includes(role),
     );
+  const selectedOrder = state.fabricOrders.find(
+    (order) => order.id === fabricOrderId,
+  );
+  function selectOrder(id: string) {
+    setFabricOrderId(id);
+    const order = state.fabricOrders.find((item) => item.id === id);
+    if (!order) {
+      setFabricName("");
+      setSupplierId("");
+      setPartyId("");
+      setFabricQuantity("");
+      setPricePerMetre("");
+      return;
+    }
+    setFabricName(order.fabricName);
+    setSupplierId(order.supplierId);
+    setPartyId(order.partyIds?.[0] || "");
+    const remaining = Math.max(
+      0,
+      order.quantityOrdered - order.receivedMetres - order.cancelledMetres,
+    );
+    setFabricQuantity(String(Math.round(remaining * 1000) / 1000));
+    setPricePerMetre(String(order.pricePerMetre));
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await mutate(
@@ -1406,6 +1436,7 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
       Object.fromEntries(new FormData(event.currentTarget)),
     );
     event.currentTarget.reset();
+    selectOrder("");
     setOpen(false);
   }
   return (
@@ -1424,7 +1455,11 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
       </div>
       {open && (
         <form className="inline-create" onSubmit={submit}>
-          <select name="fabricOrderId" defaultValue="">
+          <select
+            name="fabricOrderId"
+            value={fabricOrderId}
+            onChange={(event) => selectOrder(event.target.value)}
+          >
             <option value="">Unplanned / no PO</option>
             {state.fabricOrders.map((order) => (
               <option value={order.id} key={order.id}>
@@ -1432,8 +1467,28 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
               </option>
             ))}
           </select>
-          <input name="fabricName" placeholder="Fabric name (for unplanned)" />
-          <select name="supplierId" required defaultValue="">
+          {selectedOrder ? (
+            <p className="form-note span-all relation-summary">
+              <strong>{selectedOrder.poNumber}</strong> links this delivery to{" "}
+              {selectedOrder.supplierName},{" "}
+              {selectedOrder.purposeParty || "its party"}, and{" "}
+              {selectedOrder.fabricName}. The remaining quantity and PO rate
+              have been filled automatically.
+            </p>
+          ) : null}
+          <input
+            name="fabricName"
+            value={fabricName}
+            onChange={(event) => setFabricName(event.target.value)}
+            required
+            placeholder="Fabric name (for unplanned)"
+          />
+          <select
+            name="supplierId"
+            required
+            value={supplierId}
+            onChange={(event) => setSupplierId(event.target.value)}
+          >
             <option value="" disabled>
               Supplier
             </option>
@@ -1443,7 +1498,12 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
               </option>
             ))}
           </select>
-          <select name="partyId" required defaultValue="">
+          <select
+            name="partyId"
+            required
+            value={partyId}
+            onChange={(event) => setPartyId(event.target.value)}
+          >
             <option value="" disabled>
               Party / purpose
             </option>
@@ -1490,6 +1550,8 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
             step="0.01"
             name="fabricQuantity"
             required
+            value={fabricQuantity}
+            onChange={(event) => setFabricQuantity(event.target.value)}
             placeholder="Fabric quantity (m)"
           />
           <input
@@ -1497,6 +1559,8 @@ function NewTransport({ state, mutate }: { state: State; mutate: Mutate }) {
             min="0"
             step="0.01"
             name="pricePerMetre"
+            value={pricePerMetre}
+            onChange={(event) => setPricePerMetre(event.target.value)}
             placeholder="Price / m (unplanned)"
           />
           <input type="date" name="dcIssueDate" required />
@@ -1540,7 +1604,8 @@ function WorkbookSync({
       }[];
     } | null>(null),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [resetOpen, setResetOpen] = useState(false);
   const latest = useMemo(
     () =>
       state.syncRuns
@@ -1594,6 +1659,29 @@ function WorkbookSync({
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : "Could not commit workbook",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function resetOperations() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/sync/workbook/reset", {
+        method: "POST",
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      setPreview(null);
+      setFile(null);
+      setResetOpen(false);
+      await refresh();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not clear workbook operations",
       );
     } finally {
       setBusy(false);
@@ -1733,7 +1821,67 @@ function WorkbookSync({
             <Download size={14} /> Download pre-import backup
           </Link>
         )}
+        {state.user.role === "admin" && (
+          <button
+            className="button danger-button small sync-reset-button"
+            type="button"
+            onClick={() => setResetOpen(true)}
+          >
+            Clear workbook operations
+          </button>
+        )}
       </section>
+      {resetOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="form-modal compact-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-workbook-title"
+          >
+            <header>
+              <div>
+                <span className="eyebrow">WORKBOOK RESET</span>
+                <h2 id="reset-workbook-title">Clear operational data?</h2>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="Close"
+                onClick={() => setResetOpen(false)}
+              >
+                <X size={19} />
+              </button>
+            </header>
+            <div className="modal-body">
+              <p>
+                A restorable backup is created first. Fabric masters, POs,
+                receipts, transports, challans, production, inward records,
+                brands, workbook issues, and sync history are then cleared.
+                Users, settings, invoices, and manually created garment records
+                stay in place.
+              </p>
+              <div className="modal-actions">
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => setResetOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button danger-button"
+                  type="button"
+                  disabled={busy}
+                  onClick={resetOperations}
+                >
+                  <AlertTriangle size={16} />
+                  {busy ? "Creating backup…" : "Create backup and clear"}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
