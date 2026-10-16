@@ -495,7 +495,7 @@ export interface ImportIssue extends Base {
 }
 export interface SyncRun extends Base {
   fileName: string;
-  status: "preview" | "committed" | "failed";
+  status: "preview" | "committed" | "failed" | "superseded";
   mode: "replace" | "sync";
   summary: Record<string, number>;
   sourceFingerprint: string;

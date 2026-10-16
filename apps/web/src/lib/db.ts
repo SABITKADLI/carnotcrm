@@ -491,6 +491,9 @@ export function transaction<T>(fn: () => T): T | Promise<T> {
         await ensurePostgres();
         await client.query("BEGIN");
         await client.query(
+          "SET LOCAL idle_in_transaction_session_timeout = '30s'",
+        );
+        await client.query(
           "SELECT pg_advisory_xact_lock(hashtext('carnotcrm'))",
         );
         const store = await loadStore(client);

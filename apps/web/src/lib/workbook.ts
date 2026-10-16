@@ -1185,6 +1185,13 @@ export async function previewWorkbook(
     payload: pack({ ...parsed, sourceWorkbook: buffer.toString("base64") }),
   };
   await transaction(() => {
+    for (const previous of all("syncRuns"))
+      if (previous.status === "preview")
+        put("syncRuns", {
+          ...previous,
+          status: "superseded",
+          payload: undefined,
+        });
     clearKind("syncConflicts");
     for (const conflict of conflicts) put("syncConflicts", conflict);
     put("syncRuns", run);

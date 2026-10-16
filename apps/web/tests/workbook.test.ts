@@ -283,6 +283,9 @@ test("workbook preview repairs missing fields or requires an explicit skip", asy
   await assert.rejects(commitWorkbook(first.runId, admin), /explicit choice to skip/);
   const repaired = await repairWorkbookPreview(first.runId, [{ sheet: "FABRIC ORDERS", rowNumber: 3, fields: { Price: "120" } }], admin);
   assert.ok(!repaired.issues.some((issue) => issue.severity === "error"));
+  const previous = all("syncRuns").find((run) => run.id === first.runId);
+  assert.equal(previous?.status, "superseded");
+  assert.equal(previous?.payload, undefined);
   await commitWorkbook(repaired.runId, admin);
   assert.equal(all("fabricOrders").length, 1);
   assert.equal(all("fabricOrders")[0].poNumber, "PO2627/001");
