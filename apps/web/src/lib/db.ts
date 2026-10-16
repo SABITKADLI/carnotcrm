@@ -108,6 +108,29 @@ function pool() {
 async function ensurePostgres() {
   if (!globalState.carnotReady) {
     globalState.carnotReady = (async () => {
+      const schema = await pool().query(`
+        SELECT
+          to_regclass('public.entities') IS NOT NULL AS entities,
+          to_regclass('public.users') IS NOT NULL AS users,
+          to_regclass('public.sessions') IS NOT NULL AS sessions,
+          to_regclass('public.settings') IS NOT NULL AS settings,
+          to_regclass('public.operations') IS NOT NULL AS operations,
+          to_regclass('public.login_attempts') IS NOT NULL AS login_attempts,
+          EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='users'
+              AND column_name='access_role'
+          ) AS access_role,
+          EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='users'
+              AND column_name='partner_id'
+          ) AS partner_id
+      `);
+      if (
+        Object.values(schema.rows[0] as Record<string, boolean>).every(Boolean)
+      )
+        return;
       await pool().query(`
         CREATE TABLE IF NOT EXISTS entities (
           kind text NOT NULL,
@@ -151,7 +174,10 @@ async function ensurePostgres() {
       await pool().query(
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_id text",
       );
-    })();
+    })().catch((error) => {
+      globalState.carnotReady = undefined;
+      throw error;
+    });
   }
   await globalState.carnotReady;
 }
@@ -280,18 +306,38 @@ async function loadStore(client: PoolClient): Promise<Store> {
 }
 
 async function commitStore(client: PoolClient, store: Store) {
-  for (const key of store.deletedEntities) {
-    const [kind, id] = key.split(":", 2);
-    await client.query("DELETE FROM entities WHERE kind=$1 AND id=$2", [
-      kind,
-      id,
-    ]);
-  }
-  for (const key of store.dirtyEntities) {
-    const [kind, id] = key.split(":", 2) as [Kind, string];
+  const batchSize = 100;
+  const deleted = [...store.deletedEntities];
+  for (let offset = 0; offset < deleted.length; offset += batchSize) {
+    const batch = deleted.slice(offset, offset + batchSize);
+    const kinds: string[] = [];
+    const ids: string[] = [];
+    for (const key of batch) {
+      const separator = key.indexOf(":");
+      kinds.push(key.slice(0, separator));
+      ids.push(key.slice(separator + 1));
+    }
     await client.query(
-      "INSERT INTO entities(kind,id,data) VALUES($1,$2,$3::jsonb) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data",
-      [kind, id, JSON.stringify(fromStore(store, kind).get(id))],
+      `DELETE FROM entities AS entity
+       USING unnest($1::text[], $2::text[]) AS removed(kind, id)
+       WHERE entity.kind=removed.kind AND entity.id=removed.id`,
+      [kinds, ids],
+    );
+  }
+  const dirty = [...store.dirtyEntities];
+  for (let offset = 0; offset < dirty.length; offset += batchSize) {
+    const batch = dirty.slice(offset, offset + batchSize).map((key) => {
+      const separator = key.indexOf(":");
+      const kind = key.slice(0, separator) as Kind;
+      const id = key.slice(separator + 1);
+      return { kind, id, data: fromStore(store, kind).get(id) };
+    });
+    await client.query(
+      `INSERT INTO entities(kind,id,data)
+       SELECT kind,id,data
+       FROM jsonb_to_recordset($1::jsonb) AS record(kind text,id text,data jsonb)
+       ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data`,
+      [JSON.stringify(batch)],
     );
   }
   for (const userId of store.dirtyUsers) {
